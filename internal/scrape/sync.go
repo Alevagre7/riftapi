@@ -2,9 +2,11 @@ package scrape
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"log"
 
+	"github.com/xalevagre7/riftapi/internal/domain"
 	"github.com/xalevagre7/riftapi/internal/health"
 	"github.com/xalevagre7/riftapi/internal/store"
 )
@@ -48,6 +50,15 @@ type Syncer struct {
 	BuildID string
 }
 
+// setMeta is the per-set accumulator the syncer builds while
+// processing cards. The label is taken from the first card's set
+// reference; the count is the number of cards seen for the set in
+// the current sync.
+type setMeta struct {
+	label string
+	count int
+}
+
 // Run executes one sync. The returned error is also reflected in the
 // store's sync_state and (if Alert is configured) sent to Telegram.
 // On success, the store's card and sync_state tables reflect the
@@ -75,6 +86,13 @@ func (s *Syncer) Run(ctx context.Context) error {
 
 	repo := s.Store.Cards()
 	rows := make([]store.CardRow, 0, len(page.CardJSONs))
+	// setsByID accumulates the (label, card_count) per set_id as we
+	// process each card. The label is taken from the first card's
+	// set reference; the upstream's blades[2].sets.items[] may not
+	// carry a label in every fixture. card_count is the actual
+	// number of cards transformed for the set (not the collector
+	// number max — variants push it above the max).
+	setsByID := make(map[string]*setMeta)
 	for i, raw := range page.CardJSONs {
 		card, err := TransformCard(raw, page.CollectorMaxBySet)
 		if err != nil {
@@ -97,6 +115,13 @@ func (s *Syncer) Run(ctx context.Context) error {
 			CleanName:       card.Metadata.CleanName,
 			Payload:         payload,
 		})
+
+		m, ok := setsByID[card.Set.SetID]
+		if !ok {
+			m = &setMeta{label: card.Set.Label}
+			setsByID[card.Set.SetID] = m
+		}
+		m.count++
 	}
 
 	// SyncCards is a single transaction that upserts every row and
@@ -108,6 +133,15 @@ func (s *Syncer) Run(ctx context.Context) error {
 		return s.fail(ctx, fmt.Errorf("sync cards: %w", err))
 	}
 	count := len(rows)
+
+	// Upsert the sets seen in this run. Done after the card
+	// transaction so a set-row write failure doesn't roll back a
+	// successful card sync. The set_count column reflects the
+	// actual number of cards per set (not the upstream's
+	// collectorNumberMax, which excludes variants).
+	if err := s.upsertSets(ctx, setsByID); err != nil {
+		return s.fail(ctx, fmt.Errorf("upsert sets: %w", err))
+	}
 
 	if s.MinCount > 0 && count < s.MinCount {
 		return s.fail(ctx, fmt.Errorf("only %d cards parsed, want >= %d", count, s.MinCount))
@@ -138,4 +172,42 @@ func (s *Syncer) fail(ctx context.Context, err error) error {
 		log.Printf("alert send failed: %v", alertErr)
 	}
 	return err
+}
+
+// upsertSets writes one row per set seen in this run. TCGPlayerID,
+// CardmarketID, and PublishedOn are always nil — the gallery does
+// not provide them (ADR-0001) and the Set's ID is the set_id (we
+// don't have riftcodex UUIDs).
+func (s *Syncer) upsertSets(ctx context.Context, sets map[string]*setMeta) error {
+	if len(sets) == 0 {
+		return nil
+	}
+	setRepo := s.Store.Sets()
+	for setID, m := range sets {
+		payload, err := encodeSetPayload(setID, m.label, m.count)
+		if err != nil {
+			return fmt.Errorf("encode set %s: %w", setID, err)
+		}
+		if err := setRepo.Upsert(ctx, store.SetRow{
+			SetID:     setID,
+			CardCount: m.count,
+			Payload:   payload,
+		}); err != nil {
+			return fmt.Errorf("upsert set %s: %w", setID, err)
+		}
+	}
+	return nil
+}
+
+// encodeSetPayload serialises a domain.Set to the JSON blob stored
+// in the sets.payload column. TCGPlayerID, CardmarketID, and
+// PublishedOn are nil per ADR-0001.
+func encodeSetPayload(setID, label string, cardCount int) ([]byte, error) {
+	count := cardCount
+	return json.Marshal(domain.Set{
+		ID:        setID,
+		Name:      label,
+		SetID:     setID,
+		CardCount: &count,
+	})
 }

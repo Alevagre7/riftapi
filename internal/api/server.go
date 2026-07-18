@@ -47,6 +47,7 @@ func (s *Server) Routes() http.Handler {
 	mux.HandleFunc("GET /{$}", s.root)
 	mux.HandleFunc("GET /health", s.health)
 	s.registerCardRoutes(mux)
+	s.registerSetRoutes(mux)
 	s.registerIndexRoutes(mux)
 	return corsMiddleware(mux)
 }

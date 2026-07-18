@@ -705,6 +705,195 @@ func TestIndexTags_DistinctArrayValues(t *testing.T) {
 	}
 }
 
+// --- Phase 5: /sets/* ----------------------------------------------------
+
+// seedSets inserts a small set of SetRows directly via the
+// SetRepo. The API tests need a non-empty sets table to exercise
+// /sets; the syncer populates this in production, but the API
+// tests should not depend on the syncer.
+func seedSets(t *testing.T, st *store.Store, sets ...store.SetRow) {
+	t.Helper()
+	repo := st.Sets()
+	ctx := context.Background()
+	for _, row := range sets {
+		if err := repo.Upsert(ctx, row); err != nil {
+			t.Fatalf("seed sets: %v", err)
+		}
+	}
+}
+
+func sampleSetRow(t *testing.T, setID, label string, cardCount int) store.SetRow {
+	t.Helper()
+	count := cardCount
+	payload, err := json.Marshal(domain.Set{
+		ID:        setID,
+		Name:      label,
+		SetID:     setID,
+		CardCount: &count,
+	})
+	if err != nil {
+		t.Fatalf("marshal set: %v", err)
+	}
+	return store.SetRow{
+		SetID:     setID,
+		CardCount: cardCount,
+		Payload:   payload,
+	}
+}
+
+func TestSetsList(t *testing.T) {
+	st := newTestStore(t)
+	seedSets(t, st,
+		sampleSetRow(t, "ogn", "Origins", 298),
+		sampleSetRow(t, "unl", "Unleashed", 219),
+		sampleSetRow(t, "ven", "Vendetta", 166),
+	)
+	srv := api.NewServer(st)
+	rr := do(t, srv, "/sets")
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (body=%s)", rr.Code, rr.Body.String())
+	}
+	var body struct {
+		Items []map[string]any `json:"items"`
+		Total int               `json:"total"`
+		Page  int               `json:"page"`
+		Size  int               `json:"size"`
+		Pages int               `json:"pages"`
+	}
+	if err := json.NewDecoder(rr.Body).Decode(&body); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if body.Total != 3 {
+		t.Errorf("total = %d, want 3", body.Total)
+	}
+	if len(body.Items) != 3 {
+		t.Errorf("len(items) = %d, want 3", len(body.Items))
+	}
+	// Items are ordered by set_id (OGN < UNL < VEN).
+	if got := body.Items[0]["set_id"]; got != "ogn" {
+		t.Errorf("items[0].set_id = %v, want ogn", got)
+	}
+}
+
+func TestSetsList_Pagination(t *testing.T) {
+	st := newTestStore(t)
+	seedSets(t, st,
+		sampleSetRow(t, "ogn", "Origins", 298),
+		sampleSetRow(t, "unl", "Unleashed", 219),
+		sampleSetRow(t, "ven", "Vendetta", 166),
+	)
+	srv := api.NewServer(st)
+	rr := do(t, srv, "/sets?page=1&size=2")
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", rr.Code)
+	}
+	var body struct {
+		Items []map[string]any `json:"items"`
+		Total int               `json:"total"`
+		Pages int               `json:"pages"`
+	}
+	if err := json.NewDecoder(rr.Body).Decode(&body); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if body.Total != 3 {
+		t.Errorf("total = %d, want 3", body.Total)
+	}
+	if len(body.Items) != 2 {
+		t.Errorf("len(items) = %d, want 2 (page 1, size 2)", len(body.Items))
+	}
+	if body.Pages != 2 {
+		t.Errorf("pages = %d, want 2", body.Pages)
+	}
+}
+
+func TestSetsList_Empty(t *testing.T) {
+	srv := api.NewServer(newTestStore(t))
+	rr := do(t, srv, "/sets")
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", rr.Code)
+	}
+	var body struct {
+		Total  int             `json:"total"`
+		Items  []map[string]any `json:"items"`
+		Pages  int             `json:"pages"`
+	}
+	if err := json.NewDecoder(rr.Body).Decode(&body); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if body.Total != 0 {
+		t.Errorf("total = %d, want 0", body.Total)
+	}
+	if len(body.Items) != 0 {
+		t.Errorf("len(items) = %d, want 0", len(body.Items))
+	}
+}
+
+func TestSetBySetID(t *testing.T) {
+	st := newTestStore(t)
+	seedSets(t, st, sampleSetRow(t, "ogn", "Origins", 298))
+	srv := api.NewServer(st)
+	rr := do(t, srv, "/sets/set-id/ogn")
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", rr.Code)
+	}
+	var body struct {
+		SetID     string `json:"set_id"`
+		Name      string `json:"name"`
+		CardCount *int   `json:"card_count"`
+	}
+	if err := json.NewDecoder(rr.Body).Decode(&body); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if body.SetID != "ogn" {
+		t.Errorf("set_id = %q, want ogn", body.SetID)
+	}
+	if body.Name != "Origins" {
+		t.Errorf("name = %q, want Origins", body.Name)
+	}
+	if body.CardCount == nil || *body.CardCount != 298 {
+		t.Errorf("card_count = %v, want 298", body.CardCount)
+	}
+}
+
+func TestSetBySetID_NotFound(t *testing.T) {
+	srv := api.NewServer(newTestStore(t))
+	rr := do(t, srv, "/sets/set-id/missing")
+	if rr.Code != http.StatusNotFound {
+		t.Errorf("status = %d, want 404", rr.Code)
+	}
+}
+
+func TestSetByID_AlwaysNotFound(t *testing.T) {
+	// The gallery does not expose set UUIDs, so /sets/{id} always 404s.
+	srv := api.NewServer(newTestStore(t))
+	for _, id := range []string{"abc123", "any-id", "65a8"} {
+		rr := do(t, srv, "/sets/"+id)
+		if rr.Code != http.StatusNotFound {
+			t.Errorf("sets/%s: status = %d, want 404", id, rr.Code)
+		}
+	}
+}
+
+func TestSetByTcgPlayerID_AlwaysNotFound(t *testing.T) {
+	srv := api.NewServer(newTestStore(t))
+	for _, id := range []string{"12345", "24343"} {
+		rr := do(t, srv, "/sets/tcgplayer/"+id)
+		if rr.Code != http.StatusNotFound {
+			t.Errorf("sets/tcgplayer/%s: status = %d, want 404", id, rr.Code)
+		}
+	}
+}
+
+func TestSetByCardmarketID_AlwaysNotFound(t *testing.T) {
+	srv := api.NewServer(newTestStore(t))
+	for _, id := range []string{"6322", "6483"} {
+		rr := do(t, srv, "/sets/cardmarket/"+id)
+		if rr.Code != http.StatusNotFound {
+			t.Errorf("sets/cardmarket/%s: status = %d, want 404", id, rr.Code)
+		}
+	}
+}
+
 // --- smoke: ensure the helper paths compile and resolve --------------------
 
 func TestSmoke_StoreRoundTrip(t *testing.T) {

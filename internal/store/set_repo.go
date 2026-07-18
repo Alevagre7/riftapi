@@ -72,3 +72,49 @@ func (r *SetRepo) All(ctx context.Context) ([]*SetRow, error) {
 	}
 	return out, rows.Err()
 }
+
+// ListSetsOptions is the parameter set for List.
+type ListSetsOptions struct {
+	Page int
+	Size int
+}
+
+// List returns sets with pagination. Returns the rows, the total
+// count before pagination, and any error. Page/size are clamped
+// to [1, 100] to match CardRepo.ListCardsOptions behaviour.
+func (r *SetRepo) List(ctx context.Context, opts ListSetsOptions) ([]*SetRow, int, error) {
+	var total int
+	if err := r.db.QueryRowContext(ctx, `SELECT COUNT(1) FROM sets`).Scan(&total); err != nil {
+		return nil, 0, err
+	}
+
+	page := opts.Page
+	if page < 1 {
+		page = 1
+	}
+	size := opts.Size
+	if size < 1 {
+		size = 50
+	}
+	if size > 100 {
+		size = 100
+	}
+	offset := (page - 1) * size
+
+	rows, err := r.db.QueryContext(ctx,
+		`SELECT set_id, card_count, payload FROM sets ORDER BY set_id LIMIT ? OFFSET ?`,
+		size, offset,
+	)
+	if err != nil {
+		return nil, 0, err
+	}
+	defer rows.Close()
+	var out []*SetRow
+	for rows.Next() {
+		out = append(out, &SetRow{})
+		if err := rows.Scan(&out[len(out)-1].SetID, &out[len(out)-1].CardCount, &out[len(out)-1].Payload); err != nil {
+			return nil, 0, err
+		}
+	}
+	return out, total, rows.Err()
+}

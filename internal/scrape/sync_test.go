@@ -193,6 +193,60 @@ func TestSyncer_Run_FailsBelowMinCount(t *testing.T) {
 	}
 }
 
+// --- noop sender on success ----------------------------------------------
+
+func TestSyncer_Run_NoopSenderDoesNothing(t *testing.T) {
+	body, err := os.ReadFile(filepath.Join("..", "..", "testdata", "gallery", "sample.html"))
+	if err != nil {
+		t.Fatalf("read fixture: %v", err)
+	}
+	upstream := upstreamFromFixture(t, body)
+	st := newTestStore(t)
+
+	syn := &scrape.Syncer{
+		Store:  st,
+		Client: scrape.NewClient(scrape.ClientConfig{BaseURL: upstream.URL, UserAgent: "test", MaxRetries: 0}),
+		Alert:  health.NoopSender{},
+	}
+	if err := syn.Run(context.Background()); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+}
+
+// --- sets table ---------------------------------------------------------
+
+func TestSyncer_Run_PopulatesSetsTable(t *testing.T) {
+	// The sample.html fixture has 2 cards (Abandon and Mystic Shot),
+	// both in the OGN set. After the syncer runs, the sets table
+	// should have one row for OGN with card_count=2.
+	body, err := os.ReadFile(filepath.Join("..", "..", "testdata", "gallery", "sample.html"))
+	if err != nil {
+		t.Fatalf("read fixture: %v", err)
+	}
+	upstream := upstreamFromFixture(t, body)
+	st := newTestStore(t)
+
+	syn := &scrape.Syncer{
+		Store:  st,
+		Client: scrape.NewClient(scrape.ClientConfig{BaseURL: upstream.URL, UserAgent: "test", MaxRetries: 0}),
+		Alert:  &recordingSender{},
+	}
+	if err := syn.Run(context.Background()); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	set, err := st.Sets().GetByID(context.Background(), "OGN")
+	if err != nil {
+		t.Fatalf("Sets.GetByID(OGN): %v", err)
+	}
+	if set.SetID != "OGN" {
+		t.Errorf("SetID = %q, want OGN (the upstream's casing is preserved)", set.SetID)
+	}
+	if set.CardCount != 2 {
+		t.Errorf("CardCount = %d, want 2 (both sample cards are in OGN)", set.CardCount)
+	}
+}
+
 // --- fetch failure --------------------------------------------------------
 
 func TestSyncer_Run_FailsOnFetchError(t *testing.T) {
@@ -223,25 +277,5 @@ func TestSyncer_Run_FailsOnFetchError(t *testing.T) {
 	}
 	if len(alert.messages()) != 1 {
 		t.Errorf("expected 1 alert, got %d", len(alert.messages()))
-	}
-}
-
-// --- noop sender on success ----------------------------------------------
-
-func TestSyncer_Run_NoopSenderDoesNothing(t *testing.T) {
-	body, err := os.ReadFile(filepath.Join("..", "..", "testdata", "gallery", "sample.html"))
-	if err != nil {
-		t.Fatalf("read fixture: %v", err)
-	}
-	upstream := upstreamFromFixture(t, body)
-	st := newTestStore(t)
-
-	syn := &scrape.Syncer{
-		Store:  st,
-		Client: scrape.NewClient(scrape.ClientConfig{BaseURL: upstream.URL, UserAgent: "test", MaxRetries: 0}),
-		Alert:  health.NoopSender{},
-	}
-	if err := syn.Run(context.Background()); err != nil {
-		t.Fatalf("Run: %v", err)
 	}
 }
