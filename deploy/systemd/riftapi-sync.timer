@@ -1,0 +1,27 @@
+[Unit]
+Description=Schedule the riftapi nightly card-data sync
+
+[Timer]
+# Run every day at 03:00 (server local time). Adjust the hour to
+# suit your spoiler-season routine. 03:00 keeps it well clear of
+# the bot's typical peak usage and the upstream's daily builds.
+OnCalendar=*-*-* 03:00:00
+
+# If the timer would have fired while the system was off (e.g. the
+# Pi was down for maintenance), run it on the next boot instead of
+# skipping. The syncer is idempotent: re-running it on an
+# already-fresh store is a no-op apart from the Telegram alert
+# (which only fires on failure).
+Persistent=true
+
+# Don't be more than a minute late on the scheduled time. With
+# OnCalendar=*-*-* 03:00:00, a one-minute accuracy is fine.
+AccuracySec=1m
+
+# The unit to start when the timer fires. The riftapi-sync.service
+# file must live next to this one (typically
+# /etc/systemd/system/).
+Unit=riftapi-sync.service
+
+[Install]
+WantedBy=timers.target

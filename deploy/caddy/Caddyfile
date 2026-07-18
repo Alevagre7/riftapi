@@ -1,0 +1,35 @@
+# Caddyfile for riftapi
+#
+# This is the TLS-terminating reverse proxy in front of the riftapi
+# container. Replace `riftapi.lan` with the actual hostname (or
+# public domain, if you expose the API beyond your LAN) you want to
+# serve the API on.
+#
+# If you want a self-signed cert for a purely-local Pi (no public
+# DNS, no Let's Encrypt), uncomment the `tls internal` line and
+# remove the auto-HTTPS block.
+
+riftapi.lan {
+    # The riftapi container listens on 8080 inside Docker; Caddy
+    # runs on the host, so localhost is the right address.
+    reverse_proxy localhost:8080
+
+    # Pass the original Host header so the API sees the public
+    # hostname (useful if you add a per-host allowlist later).
+    header_up Host {host}
+
+    # Tighten the CORS surface: riftapi already sets
+    # Access-Control-Allow-Origin: * for any host, so Caddy does
+    # not need to touch CORS itself.
+    header_down -Server
+}
+
+# If you have a public domain and want Let's Encrypt to issue a
+# real cert, replace the block above with:
+#
+# riftapi.example.com {
+#     reverse_proxy localhost:8080
+# }
+#
+# Caddy will auto-issue and renew the cert via ACME. Nothing else
+# needs to change.

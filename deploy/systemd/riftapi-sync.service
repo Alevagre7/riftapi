@@ -1,0 +1,38 @@
+[Unit]
+Description=riftapi nightly card-data sync
+# The sync makes a single HTTPS GET to playriftbound.com and
+# writes to the local SQLite file. It needs network and Docker.
+Wants=network-online.target docker.service
+After=network-online.target docker.service
+
+[Service]
+Type=oneshot
+# Adjust WorkingDirectory to the directory holding your
+# docker-compose.yml (typically /opt/riftapi or a clone of
+# the riftapi repo).
+WorkingDirectory=/opt/riftapi
+
+# Run the sync as a one-shot Docker compose service. `--rm`
+# cleans up the container when the sync completes, so the
+# only state on disk is the SQLite snapshot.
+ExecStart=/usr/bin/docker compose run --rm sync
+
+# Secrets and runtime config come from this file. See the RUNBOOK
+# for the expected variables.
+EnvironmentFile=/etc/riftapi/riftapi.env
+
+# Send stdout/stderr to journald. `journalctl -u riftapi-sync`
+# shows the log; the syncer's own log.Printf output is captured
+# there too.
+StandardOutput=journal
+StandardError=journal
+
+# Hard timeout. The scraper is a single GET that should finish in
+# a few seconds; 10 minutes is generous and leaves headroom for
+# retries.
+TimeoutStartSec=600
+
+# Run as a non-root user. Adjust to whatever UID owns the riftapi
+# directory on the host (typically the user that cloned the repo).
+User=riftapi
+Group=riftapi
