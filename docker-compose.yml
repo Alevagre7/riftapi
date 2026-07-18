@@ -1,0 +1,57 @@
+# riftapi — local development override
+#
+# Usage:
+#   docker compose --env-file .env up        # start the API
+#   docker compose run --rm sync             # one-shot sync
+#
+# The timer that runs the sync nightly lives on the host (see docs/RUNBOOK.md),
+# not in this compose file, so it can be flipped on/off with `systemctl`.
+
+services:
+  api:
+    build:
+      context: .
+      target: api
+    image: riftapi:dev
+    platform: linux/arm64   # set to linux/amd64 on the dev machine
+    container_name: riftapi
+    restart: unless-stopped
+    environment:
+      RIFTAPI_DATABASE_PATH: /data/riftapi.db
+      RIFTAPI_API_PORT: "8080"
+      RIFTAPI_API_BIND: "0.0.0.0"
+      RIFTAPI_LOG_LEVEL: info
+    volumes:
+      - riftapi-data:/data
+    ports:
+      - "8080:8080"
+    healthcheck:
+      # /health on the container's own loopback; docker-compose will mark the
+      # service unhealthy if it returns 503.
+      test: ["CMD", "/riftapi", "--healthcheck"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+
+  sync:
+    # One-shot container for manual or scheduled syncs. The actual nightly timer
+    # is a host-level systemd unit (or a sidecar with its own scheduler); this
+    # service is here so `docker compose run --rm sync` works for ad-hoc use.
+    build:
+      context: .
+      target: sync
+    image: riftapi-sync:dev
+    platform: linux/arm64
+    profiles: ["sync"]   # not started by `docker compose up`; invoke explicitly
+    environment:
+      RIFTAPI_DATABASE_PATH: /data/riftapi.db
+      RIFTAPI_SCRAPE_USER_AGENT: riftapi/0.1 (+https://github.com/xalevagre7/riftapi)
+      RIFTAPI_TELEGRAM_ALERTS_ENABLED: "true"
+      RIFTAPI_TELEGRAM_BOT_TOKEN: ${RIFTAPI_TELEGRAM_BOT_TOKEN:-}
+      RIFTAPI_TELEGRAM_ADMIN_CHAT_ID: ${RIFTAPI_TELEGRAM_ADMIN_CHAT_ID:-}
+    volumes:
+      - riftapi-data:/data
+
+volumes:
+  riftapi-data:
+    name: riftapi-data

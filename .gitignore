@@ -1,0 +1,38 @@
+# Build artifacts
+bin/
+dist/
+*.exe
+*.dll
+*.so
+*.dylib
+
+# Test artifacts
+*.test
+*.out
+coverage.txt
+coverage.html
+
+# Local data
+data/
+*.db
+*.db-journal
+*.db-wal
+*.db-shm
+*.db.bak
+.env
+.env.local
+
+# Editor
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Scraped fixtures (intentionally not committed; the scraper regenerates them)
+testdata/gallery/*.html
+testdata/gallery/*.json
+!testdata/gallery/.gitkeep
