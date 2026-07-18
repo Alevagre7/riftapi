@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -32,19 +33,30 @@ func newTestStore(t *testing.T) *store.Store {
 	return s
 }
 
-// sampleCard is the data used to seed the test store.
+// sampleCard is the data used to seed the test store. The
+// Classification, Artist, Energy, and Tags fields exist so the
+// /index/* endpoints in Phase 5 can assert against distinct values
+// without a separate seed routine.
 type sampleCard struct {
 	riftboundID     string
 	name            string
 	setID           string
 	collectorNumber int
+	cardType        string
+	rarity          string
+	domain          []string
+	artist          string
+	energy          *int
+	tags            []string
 }
 
+func intPtr(n int) *int { return &n }
+
 var sampleCards = []sampleCard{
-	{"ogn-011", "Abandon", "OGN", 11},
-	{"ogn-066a", "Mystic Shot", "OGN", 66},
-	{"unl-001", "Jinx, Loose Cannon", "UNL", 1},
-	{"ven-001", "Vengeful Spirit", "VEN", 1},
+	{"ogn-011", "Abandon", "OGN", 11, "Spell", "Common", []string{"Fury"}, "Artist A", intPtr(3), []string{"Freljord", "Noxus"}},
+	{"ogn-066a", "Mystic Shot", "OGN", 66, "Spell", "Rare", []string{"Mind"}, "Artist B", intPtr(1), []string{"Ionia"}},
+	{"unl-001", "Jinx, Loose Cannon", "UNL", 1, "Unit", "Epic", []string{"Chaos"}, "Artist C", intPtr(4), []string{"Zaun"}},
+	{"ven-001", "Vengeful Spirit", "VEN", 1, "Unit", "Uncommon", []string{"Fury"}, "Artist A", intPtr(2), []string{"Shadow Isles"}},
 }
 
 // seedStore inserts the sample cards and returns the store.
@@ -66,21 +78,34 @@ func seedStore(t *testing.T) *store.Store {
 // payload for a sample card.
 func buildCardRow(t *testing.T, c sampleCard) store.CardRow {
 	t.Helper()
+	tags := c.tags
+	artist := c.artist
 	card := domain.Card{
 		ID:              c.riftboundID,
 		Name:            c.name,
 		RiftboundID:     c.riftboundID,
 		CollectorNumber: c.collectorNumber,
 		PublicCode:      c.riftboundID + "-298",
-		Set:             domain.CardSet{SetID: c.setID, Label: c.setID},
-		Classification:  domain.Classification{Type: "Unit", Rarity: "Common", Domain: []string{}},
-		Text:            domain.Text{Rich: "rules", Plain: "rules"},
-		Media:           domain.Media{ImageURL: "https://example.com/" + c.riftboundID + ".png"},
+		Attributes: &domain.Attributes{
+			Energy: c.energy,
+		},
+		Classification: domain.Classification{
+			Type:      c.cardType,
+			Rarity:    c.rarity,
+			Domain:    c.domain,
+		},
+		Text: domain.Text{Rich: "rules", Plain: "rules"},
+		Set:  domain.CardSet{SetID: c.setID, Label: c.setID},
+		Media: domain.Media{
+			ImageURL: "https://example.com/" + c.riftboundID + ".png",
+			Artist:   &artist,
+		},
+		Tags:        &tags,
+		Orientation: "portrait",
 		Metadata: domain.Metadata{
 			CleanName:    strings.ToLower(c.name),
 			AlternateArt: strings.HasSuffix(c.riftboundID, "a"),
 		},
-		Orientation: "portrait",
 	}
 	payload, err := json.Marshal(&card)
 	if err != nil {
@@ -113,6 +138,54 @@ func do(t *testing.T, srv *api.Server, path string) *httptest.ResponseRecorder {
 	rr := httptest.NewRecorder()
 	srv.Routes().ServeHTTP(rr, req)
 	return rr
+}
+
+// indexBody is the shape of an /index/* response (type + values).
+// Values can be strings or ints, so we use a small union.
+type indexBody struct {
+	Type   string   `json:"type"`
+	Total  int      `json:"total"`
+	Values []string `json:"values"`
+}
+
+// decodeIndex decodes a 200 OK /index/* response and fails the test
+// on any non-2xx. The Values are decoded as strings; the int
+// /index/* endpoints are asserted against []int in the caller by
+// re-decoding the body bytes (the JSON value type is `integer`
+// for the int fields, so the raw JSON distinguishes them).
+func decodeIndex(t *testing.T, rr *httptest.ResponseRecorder) indexBody {
+	t.Helper()
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (body=%s)", rr.Code, rr.Body.String())
+	}
+	var body indexBody
+	if err := json.NewDecoder(rr.Body).Decode(&body); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	return body
+}
+
+// decodeIndexInt is the int-Values variant of decodeIndex, used
+// for /index/{energy, might, power}. The HTTP wire format is
+// identical except that values are JSON numbers; the two
+// helpers exist so the test asserts the correct value type.
+func decodeIndexInt(t *testing.T, rr *httptest.ResponseRecorder) indexIntBody {
+	t.Helper()
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (body=%s)", rr.Code, rr.Body.String())
+	}
+	var body indexIntBody
+	if err := json.NewDecoder(rr.Body).Decode(&body); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	return body
+}
+
+// indexIntBody is the int-Values variant of indexBody.
+type indexIntBody struct {
+	Type   string `json:"type"`
+	Total  int    `json:"total"`
+	Values []int  `json:"values"`
 }
 
 // --- GET / -----------------------------------------------------------------
@@ -408,6 +481,227 @@ func TestIndexCardNames_Empty(t *testing.T) {
 	}
 	if len(body.Values) != 0 {
 		t.Errorf("values = %v, want []", body.Values)
+	}
+}
+
+// --- Phase 5: /cards list, /cards/search, /cards/tcgplayer, /index/* ----
+
+func TestCardsList(t *testing.T) {
+	srv := newTestServer(t)
+	rr := do(t, srv, "/cards")
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (body=%s)", rr.Code, rr.Body.String())
+	}
+	var body struct {
+		Items []map[string]any `json:"items"`
+		Total int               `json:"total"`
+		Page  int               `json:"page"`
+		Size  int               `json:"size"`
+		Pages int               `json:"pages"`
+	}
+	if err := json.NewDecoder(rr.Body).Decode(&body); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if body.Total != len(sampleCards) {
+		t.Errorf("total = %d, want %d", body.Total, len(sampleCards))
+	}
+	if len(body.Items) != len(sampleCards) {
+		t.Errorf("len(items) = %d, want %d", len(body.Items), len(sampleCards))
+	}
+	if body.Page != 1 {
+		t.Errorf("page = %d, want 1 (default)", body.Page)
+	}
+	if body.Size != 50 {
+		t.Errorf("size = %d, want 50 (default)", body.Size)
+	}
+}
+
+func TestCardsList_SortByCollectorNumberDesc(t *testing.T) {
+	srv := newTestServer(t)
+	rr := do(t, srv, "/cards?sort=collector_number&dir=-1")
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", rr.Code)
+	}
+	var body struct {
+		Items []struct {
+			RiftboundID     string `json:"riftbound_id"`
+			CollectorNumber int    `json:"collector_number"`
+		} `json:"items"`
+	}
+	if err := json.NewDecoder(rr.Body).Decode(&body); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	// Expected order by collector_number desc: unl-001 (1)? — actually
+	// sample cards: ogn-011 (11), ogn-066a (66), unl-001 (1), ven-001 (1).
+	// Descending: 66, 11, 1, 1. Stable order for ties is implementation
+	// defined; we just assert the maximum (66) comes first.
+	if len(body.Items) == 0 || body.Items[0].CollectorNumber != 66 {
+		t.Errorf("first item collector_number = %d, want 66", body.Items[0].CollectorNumber)
+	}
+}
+
+func TestCardsList_FilterBySetID(t *testing.T) {
+	srv := newTestServer(t)
+	rr := do(t, srv, "/cards?set_id=ogn")
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", rr.Code)
+	}
+	var body struct {
+		Items []struct {
+			Set struct {
+				SetID string `json:"set_id"`
+			} `json:"set"`
+		} `json:"items"`
+		Total int `json:"total"`
+	}
+	if err := json.NewDecoder(rr.Body).Decode(&body); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if body.Total != 2 {
+		t.Errorf("total = %d, want 2 (only OGN cards)", body.Total)
+	}
+	for _, item := range body.Items {
+		if item.Set.SetID != "OGN" {
+			t.Errorf("item.set.set_id = %q, want OGN", item.Set.SetID)
+		}
+	}
+}
+
+func TestCardsList_Pagination(t *testing.T) {
+	srv := newTestServer(t)
+	// 4 sample cards; page 1 with size 2 should return 2 items, total 4, pages 2.
+	rr := do(t, srv, "/cards?page=1&size=2")
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", rr.Code)
+	}
+	var body struct {
+		Items []map[string]any `json:"items"`
+		Total int               `json:"total"`
+		Pages int               `json:"pages"`
+	}
+	if err := json.NewDecoder(rr.Body).Decode(&body); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if body.Total != 4 {
+		t.Errorf("total = %d, want 4", body.Total)
+	}
+	if len(body.Items) != 2 {
+		t.Errorf("len(items) = %d, want 2 (page 1, size 2)", len(body.Items))
+	}
+	if body.Pages != 2 {
+		t.Errorf("pages = %d, want 2", body.Pages)
+	}
+}
+
+func TestCardsSearch(t *testing.T) {
+	srv := newTestServer(t)
+	// All sample cards have text.plain = "rules", so searching for
+	// "rules" matches all of them.
+	rr := do(t, srv, "/cards/search?query=rules")
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", rr.Code)
+	}
+	var body struct {
+		Items []map[string]any `json:"items"`
+		Total int               `json:"total"`
+	}
+	if err := json.NewDecoder(rr.Body).Decode(&body); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if body.Total != len(sampleCards) {
+		t.Errorf("total = %d, want %d", body.Total, len(sampleCards))
+	}
+}
+
+func TestCardsSearch_NoQuery(t *testing.T) {
+	srv := newTestServer(t)
+	rr := do(t, srv, "/cards/search")
+	if rr.Code != http.StatusBadRequest {
+		t.Errorf("status = %d, want 400 (missing query)", rr.Code)
+	}
+}
+
+func TestCardsByTcgPlayerID_AlwaysNotFound(t *testing.T) {
+	// The gallery does not expose tcgplayer_id (ADR-0001). The
+	// endpoint is registered for surface completeness but always 404s.
+	srv := newTestServer(t)
+	for _, id := range []string{"12345", "67890", "any-id"} {
+		rr := do(t, srv, "/cards/tcgplayer/"+id)
+		if rr.Code != http.StatusNotFound {
+			t.Errorf("tcgplayer/%s: status = %d, want 404", id, rr.Code)
+		}
+	}
+}
+
+func TestIndexTypes(t *testing.T) {
+	srv := newTestServer(t)
+	rr := do(t, srv, "/index/types")
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", rr.Code)
+	}
+	body := decodeIndex(t, rr)
+	if body.Type != "types" {
+		t.Errorf("type = %q, want types", body.Type)
+	}
+	if !slices.Equal(body.Values, []string{"Spell", "Unit"}) {
+		t.Errorf("values = %v, want [Spell Unit]", body.Values)
+	}
+	if body.Total != 2 {
+		t.Errorf("total = %d, want 2", body.Total)
+	}
+}
+
+func TestIndexRarities(t *testing.T) {
+	srv := newTestServer(t)
+	rr := do(t, srv, "/index/rarities")
+	body := decodeIndex(t, rr)
+	if !slices.Equal(body.Values, []string{"Common", "Epic", "Rare", "Uncommon"}) {
+		t.Errorf("values = %v, want [Common Epic Rare Uncommon]", body.Values)
+	}
+}
+
+func TestIndexDomains_DistinctArrayValues(t *testing.T) {
+	// Fury appears in two cards' domains; the index should report
+	// each unique domain once, sorted.
+	srv := newTestServer(t)
+	rr := do(t, srv, "/index/domains")
+	body := decodeIndex(t, rr)
+	if !slices.Equal(body.Values, []string{"Chaos", "Fury", "Mind"}) {
+		t.Errorf("values = %v, want [Chaos Fury Mind]", body.Values)
+	}
+	if body.Total != 3 {
+		t.Errorf("total = %d, want 3 (Fury collapsed)", body.Total)
+	}
+}
+
+func TestIndexArtists(t *testing.T) {
+	// Artist A appears on two cards; should be listed once.
+	srv := newTestServer(t)
+	rr := do(t, srv, "/index/artists")
+	body := decodeIndex(t, rr)
+	if !slices.Equal(body.Values, []string{"Artist A", "Artist B", "Artist C"}) {
+		t.Errorf("values = %v, want [Artist A Artist B Artist C]", body.Values)
+	}
+}
+
+func TestIndexEnergy(t *testing.T) {
+	srv := newTestServer(t)
+	rr := do(t, srv, "/index/energy")
+	body := decodeIndexInt(t, rr)
+	if !slices.Equal(body.Values, []int{1, 2, 3, 4}) {
+		t.Errorf("values = %v, want [1 2 3 4]", body.Values)
+	}
+}
+
+func TestIndexTags_DistinctArrayValues(t *testing.T) {
+	srv := newTestServer(t)
+	rr := do(t, srv, "/index/tags")
+	body := decodeIndex(t, rr)
+	if !slices.Equal(body.Values, []string{"Freljord", "Ionia", "Noxus", "Shadow Isles", "Zaun"}) {
+		t.Errorf("values = %v, want [Freljord Ionia Noxus Shadow Isles Zaun]", body.Values)
+	}
+	if body.Total != 5 {
+		t.Errorf("total = %d, want 5", body.Total)
 	}
 }
 

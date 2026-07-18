@@ -190,6 +190,190 @@ func (r *CardRepo) All(ctx context.Context) ([]*CardRow, error) {
 	return r.scanMany(ctx, q)
 }
 
+// --- list / search --------------------------------------------------------
+
+// ListCardsOptions is the parameter set for List and Search. SetID
+// filters to a single set (empty = no filter). Sort is one of
+// "name" (default), "collector_number", or "set_id". Dir is 1 for
+// ascending (default) or -1 for descending. Page is 1-based; size
+// is the page size (clamped to [1, 100]).
+type ListCardsOptions struct {
+	SetID string
+	Sort  string
+	Dir   int
+	Page  int
+	Size  int
+}
+
+// List returns cards matching the filter (set_id, sort, page, size),
+// paginated. Returns the rows, the total count before pagination,
+// and any error. The total is the count of rows matching the
+// filter, matching the riftcodex SearchResponse.total field.
+func (r *CardRepo) List(ctx context.Context, opts ListCardsOptions) ([]*CardRow, int, error) {
+	return r.queryCards(ctx, opts, "")
+}
+
+// SearchText returns cards whose text.plain contains the query as
+// a substring (case-insensitive). Same filter, sort, and pagination
+// options as List. The query is matched against the stored
+// text.plain (the HTML-stripped body of the card's rules text).
+func (r *CardRepo) SearchText(ctx context.Context, query string, opts ListCardsOptions) ([]*CardRow, int, error) {
+	return r.queryCards(ctx, opts, query)
+}
+
+func (r *CardRepo) queryCards(ctx context.Context, opts ListCardsOptions, textQuery string) ([]*CardRow, int, error) {
+	where := []string{}
+	args := []any{}
+
+	if opts.SetID != "" {
+		where = append(where, "set_id = ? COLLATE NOCASE")
+		args = append(args, opts.SetID)
+	}
+	if textQuery != "" {
+		where = append(where, "json_extract(payload, '$.text.plain') LIKE ?")
+		args = append(args, "%"+textQuery+"%")
+	}
+
+	whereClause := ""
+	if len(where) > 0 {
+		whereClause = " WHERE " + strings.Join(where, " AND ")
+	}
+
+	var total int
+	countQuery := "SELECT COUNT(1) FROM cards" + whereClause
+	if err := r.db.QueryRowContext(ctx, countQuery, args...).Scan(&total); err != nil {
+		return nil, 0, err
+	}
+
+	page := opts.Page
+	if page < 1 {
+		page = 1
+	}
+	size := opts.Size
+	if size < 1 {
+		size = 50
+	}
+	if size > 100 {
+		size = 100
+	}
+	offset := (page - 1) * size
+
+	sortColumn := sortColumnFor(opts.Sort)
+	direction := "ASC"
+	if opts.Dir == -1 {
+		direction = "DESC"
+	}
+
+	query := fmt.Sprintf(
+		"SELECT riftbound_id, public_code, set_id, collector_number, name, clean_name, payload FROM cards%s ORDER BY %s %s LIMIT ? OFFSET ?",
+		whereClause, sortColumn, direction,
+	)
+	args = append(args, size, offset)
+
+	rows, err := r.scanMany(ctx, query, args...)
+	return rows, total, err
+}
+
+func sortColumnFor(s string) string {
+	switch s {
+	case "collector_number":
+		return "collector_number"
+	case "set_id":
+		return "set_id"
+	case "name", "":
+		return "name"
+	default:
+		return "name"
+	}
+}
+
+// --- distinct values for /index/* ---------------------------------------
+
+// DistinctStringField returns the distinct non-null values of a
+// JSON string field across all cards, sorted. Used by the
+// /index/* endpoints for fields like type, rarity, artist.
+func (r *CardRepo) DistinctStringField(ctx context.Context, path string) ([]string, error) {
+	query := fmt.Sprintf(
+		`SELECT DISTINCT json_extract(payload, '$.%s') AS v FROM cards
+		 WHERE json_extract(payload, '$.%s') IS NOT NULL
+		 ORDER BY 1`,
+		path, path,
+	)
+	rows, err := r.db.QueryContext(ctx, query)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []string
+	for rows.Next() {
+		var s sql.NullString
+		if err := rows.Scan(&s); err != nil {
+			return nil, err
+		}
+		if s.Valid {
+			out = append(out, s.String)
+		}
+	}
+	return out, rows.Err()
+}
+
+// DistinctIntField returns the distinct integer values of a JSON
+// field across all cards, sorted ascending. Used by /index/energy,
+// /index/might, /index/power. Non-integer values (null, missing,
+// or non-numeric JSON) are skipped.
+func (r *CardRepo) DistinctIntField(ctx context.Context, path string) ([]int, error) {
+	query := fmt.Sprintf(
+		`SELECT DISTINCT json_extract(payload, '$.%s') AS v FROM cards
+		 WHERE json_extract(payload, '$.%s') IS NOT NULL
+		   AND json_type(json_extract(payload, '$.%s')) = 'integer'
+		 ORDER BY 1`,
+		path, path, path,
+	)
+	rows, err := r.db.QueryContext(ctx, query)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []int
+	for rows.Next() {
+		var n sql.NullInt64
+		if err := rows.Scan(&n); err != nil {
+			return nil, err
+		}
+		if n.Valid {
+			out = append(out, int(n.Int64))
+		}
+	}
+	return out, rows.Err()
+}
+
+// DistinctArrayValues returns the distinct values of a JSON array
+// field, unnested. Used by /index/domains and /index/tags.
+func (r *CardRepo) DistinctArrayValues(ctx context.Context, path string) ([]string, error) {
+	query := fmt.Sprintf(
+		`SELECT DISTINCT value FROM cards, json_each(json_extract(payload, '$.%s'))
+		 WHERE json_extract(payload, '$.%s') IS NOT NULL
+		 ORDER BY 1`,
+		path, path,
+	)
+	rows, err := r.db.QueryContext(ctx, query)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []string
+	for rows.Next() {
+		var s sql.NullString
+		if err := rows.Scan(&s); err != nil {
+			return nil, err
+		}
+		if s.Valid {
+			out = append(out, s.String)
+		}
+	}
+	return out, rows.Err()
+}
+
 func (r *CardRepo) scanOne(ctx context.Context, q string, args ...any) (*CardRow, error) {
 	row := r.db.QueryRowContext(ctx, q, args...)
 	out, err := scanCardRow(row)

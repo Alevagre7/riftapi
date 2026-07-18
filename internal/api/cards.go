@@ -14,6 +14,11 @@ import (
 // the four endpoints the bot currently uses; Phase 5 adds the
 // remaining riftcodex endpoints (list, search, tcgplayer).
 func (s *Server) registerCardRoutes(mux *http.ServeMux) {
+	// Phase 5: list + search + tcgplayer (the last is always 404).
+	mux.HandleFunc("GET /cards", s.listCards)
+	mux.HandleFunc("GET /cards/search", s.searchCards)
+	mux.HandleFunc("GET /cards/tcgplayer/{id}", s.getCardByTcgPlayerID)
+	// Phase 4: the four endpoints the bot uses today.
 	mux.HandleFunc("GET /cards/name", s.listCardsByName)
 	mux.HandleFunc("GET /cards/riftbound/{id}", s.getCardsByRiftboundID)
 	mux.HandleFunc("GET /cards/{id}", s.getCardByID)
