@@ -1,7 +1,7 @@
 // riftapi-sync pulls the latest card gallery from playriftbound.com,
-// transforms it into the Riftcodex JSON shape, and writes a fresh
-// SQLite snapshot. It is meant to be run by a host-level systemd
-// timer during Spoiler Season, or manually with `riftapi-sync` for
+// transforms it into the card data shape, and writes a fresh
+// SQLite snapshot. It is meant to be run by a scheduler of your
+// choice during Spoiler Season, or manually with `riftapi-sync` for
 // ad-hoc use.
 //
 // The binary exits non-zero on any failure so the systemd unit can

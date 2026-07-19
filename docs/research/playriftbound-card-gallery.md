@@ -3,7 +3,7 @@
 **Date**: 2026-07-19  
 **Target URL**: `https://playriftbound.com/en-us/card-gallery/`  
 **Canonical origin**: `https://playriftbound.com` (redirects from `https://riftbound.leagueoflegends.com`)  
-**Purpose**: Sole data source for a self-hosted API mirroring the Riftcodex JSON schema.
+**Purpose**: Structural report on the upstream that populates the local card store.
 
 ---
 
@@ -83,18 +83,18 @@ Counter a spell. Return it to its owner's hand instead of putting it in their tr
 
 Keywords are in `[Square Brackets]`. Resource symbols are inline tokens like `:rb_might:`, `:rb_energy_2:`, `:rb_exhaust:`, `:rb_rune_rainbow:`. No BBCode; no `<em>`/`<i>` tags found for flavour text (flavour text is not separated from rules text in the gallery data).
 
-### What is Missing Compared to Riftcodex Schema
+### What is Missing From the Gallery
 
-The Riftcodex schema has these fields that the gallery does **not** provide directly:
+The gallery data does **not** provide these fields directly:
 
 | Missing Field | Why It Matters | Can It Be Derived? |
 |---|---|---|
-| `tcgplayer_id` | TCGPlayer product ID for price lookups | ❌ Not in gallery data. Must be sourced elsewhere (Riftcodex itself or TCGPlayer) |
+| `tcgplayer_id` | TCGPlayer product ID for price lookups | ❌ Not in gallery data. Must be sourced elsewhere (TCGPlayer itself) |
 | `text.plain` | Plain-text (no HTML) version of card text | ✅ Can strip HTML from `text.richText.body` |
 | `text.flavour` | Separate flavour/italic text | ⚠️ **Not distinguished** in gallery. Flavour text appears inline in the rich text body with no semantic markup. May need NLP/heuristic splitting. |
-| `attributes` (as a structured sub-object) | Riftcodex nests `energy`, `might`, `power` under `attributes` | ✅ Trivial to restructure |
-| `classification` (as a structured sub-object) | Riftcodex nests `type`, `supertype`, `rarity`, `domain` | ✅ Trivial to restructure |
-| `set.set_id` / `set.label` | Riftcodex wants flat `set_id`, `label` on `set` object | ✅ Derivable from gallery's `set.value.id` / `set.value.label` |
+| `attributes` (as a structured sub-object) | The card data shape nests `energy`, `might`, `power` under `attributes` | ✅ Trivial to restructure |
+| `classification` (as a structured sub-object) | The card data shape nests `type`, `supertype`, `rarity`, `domain` | ✅ Trivial to restructure |
+| `set.set_id` / `set.label` | The card data shape wants flat `set_id`, `label` on `set` object | ✅ Derivable from gallery's `set.value.id` / `set.value.label` |
 | `media.artist` | Artist as plain string | ✅ Derivable from `illustrator.values[0].label` |
 | `media.accessibility_text` | Alt text for images | ✅ Derivable from `cardImage.accessibilityText` |
 | `metadata.clean_name` | Name without special chars | ✅ Can be derived: strip punctuation, lowercase |
@@ -151,7 +151,7 @@ From the rendered HTML: filters for **Sort By**, **Set**, and "New Cards" toggle
 
 ### Total Card Count
 
-- Riftcodex API: **1,449** total cards (confirmed from `GET https://api.riftcodex.com/cards?size=1` — `{"total":1449}`). This includes cards from more sets (e.g. OPP promotional cards not in gallery).
+- A third-party public API for the same TCG reports **1,449** total cards (note: the upstream scraper does not depend on that service — it is mentioned here only to document the gap). This includes cards from more sets (e.g. promotional cards not in the gallery).
 - Gallery (`__NEXT_DATA__`): **1,178** cards.
 - Gallery (async API metadata): **1,186** cards.
 
@@ -184,7 +184,7 @@ https://cmsassets.rgpub.io/sanity/images/dsfx7636/game_data_live/89929cfa4417c99
 Each card image includes `accessibilityText` in the JSON (used as `alt` text), for example:
 > "Riftbound Spell: Abandon. [Reaction] (Play any time, even before spells and abilities resolve.)\nCounter a spell. Return it to its owner's hand instead of putting it in their trash.\n[Predict]. (Look at the top card of your Main Deck. You may recycle it.)"
 
-This is a concise rules-text summary, useful for the Riftcodex `media.accessibility_text` field.
+This is a concise rules-text summary, useful for the card data's `media.accessibility_text` field.
 
 ---
 
@@ -206,7 +206,7 @@ No disallowed paths. The card gallery (`/en-us/card-gallery/`) is explicitly all
 From `https://developer.riotgames.com/policies/riftbound`:
 
 - **Registration required**: "If your product serves players, you must register it with us regardless of whether or not your product uses official documented APIs."
-- **Use cases**: "Deck builders" and "Card libraries" are explicitly approved use cases. A self-hosted API that mirrors Riftcodex is a card library.
+- **Use cases**: "Deck builders" and "Card libraries" are explicitly approved use cases. A self-hosted card library fits this category.
 - **Monetization**: Must not simulate gameplay; must have a free tier; must be transformative.
 - **Attribution required**: Must include Riot's Legal Jibber Jabber statement: _"This project was created under Riot Games' 'Legal Jibber Jabber' policy using assets owned by Riot Games. Riot Games does not endorse or sponsor this project."_
 - **Assets**: "Your App may only use Riftbound assets (including cards) provided by the Riot API. No external or unofficial materials." — however the gallery page is a public-facing website, and parsing `__NEXT_DATA__` is a grey area. Using the official Riot API (via developer portal API key) would be the compliant approach.
@@ -275,9 +275,9 @@ Since the gallery is a JS SPA, HTML parsing would only get the empty shell. The 
 
 3. **Riot policy compliance** (Risk: High — Legal) — Riot's developer policy states: *"If your product serves players, you must register it with us regardless of whether or not your product uses official documented APIs."* Scraping the public website without registration could violate their terms, even if robots.txt allows it. The safest path is to register for an official API key.
 
-### Riftcodex-Specific Mapping
+### Mapping to the Card Data Shape
 
-To reconcile gallery data with the Riftcodex schema, the following transformations are needed per card:
+To transform the gallery data into the local card data shape, the following is needed per card:
 
 ```python
 def transform_gallery_card(g):
@@ -319,13 +319,13 @@ def transform_gallery_card(g):
             "overnumbered": g["collectorNumber"] > get_set_max(g["set"]["value"]["id"]),
             "signature": any(st["id"] == "signature" for st in g["cardType"].get("superType", [])),
         },
-        # Note: tcgplayer_id, id (Riftcodex internal) 
+        # Note: tcgplayer_id, id (opaque internal ID)
         # are NOT available from the gallery
     }
 ```
 
 Fields that **cannot** be obtained from the gallery and must be sourced elsewhere or left null:
-- `id` (Riftcodex internal UUID)
+- `id` (opaque internal UUID, not present in the gallery)
 - `tcgplayer_id`
 - `text.flavour`
 - `metadata.updated_on`
@@ -341,5 +341,4 @@ Fields that **cannot** be obtained from the gallery and must be sourced elsewher
 | `https://playriftbound.com/_next/data/{BUILD_ID}/en-us/card-gallery.json` | GET | No | JSON-only page props |
 | `https://playriftbound.com/publishing-content/v2.0/public/channel/riftbound_website/list/riftbound_gallery_cards?...` | GET | Yes (401) | Paginated card data API |
 | `https://playriftbound.com/publishing-content/v2.0/public/channel/riftbound_website/list/riftbound_gallery_sets?...` | GET | No | Set list (5 sets) |
-| `https://api.riftcodex.com/cards?...` | GET | No | Pre-existing Riftcodex API (full 1,449 cards) |
 | `https://developer.riotgames.com/apis#riftbound-content-v1` | GET | API Key | Official Riot Riftbound Content API |

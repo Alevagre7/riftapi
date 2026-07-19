@@ -7,15 +7,17 @@ docker compose + Caddy reverse proxy + nightly backup).
 ## Topology
 
 ```
-┌────────────────────────┐    ┌────────────────────────┐    ┌────────────────────────┐
-│  playriftbound.com     │    │  Pi 3B                 │    │  riftbot (sibling)     │
-│  (the upstream)         │ <─ │  docker compose:       │ <─ │  Telegram bot           │
-│  HTTPS GET              │    │   ├─ riftapi (API)     │    │                        │
-└────────────────────────┘    │   └─ riftapi-sync       │    └────────────────────────┘
-                             │     (one-shot, via timer)│
-                             │  Caddy (reverse proxy)  │
-                             │  cron (backup)          │
-                             └────────────────────────┘
+┌────────────────────────┐    ┌────────────────────────────────────────┐
+│  playriftbound.com     │    │  your host                              │
+│  (the upstream)         │ <─ │  ┌─ riftapi (long-running API process) │
+│  HTTPS GET              │    │  └─ riftapi-sync (one-shot, scheduled)│
+└────────────────────────┘    └────────────────────────────────────────┘
+                                                            │
+                                                            ▼
+                                                ┌────────────────────────┐
+                                                │  any HTTP client        │
+                                                │  (bot, app, CLI, …)     │
+                                                └────────────────────────┘
 ```
 
 The API process runs as a long-lived Docker container with
@@ -214,11 +216,7 @@ sqlite3 /data/riftapi.db "SELECT riftbound_id, name FROM cards WHERE riftbound_i
 # → empty: the card is not in the local store.
 ```
 
-The riftcodex `id` field is a UUID. The bot's `getCardById` calls
-`/cards/{id}` with a UUID, which 404s. The bot's
-`getCardByRiftboundId` calls `/cards/riftbound/{id}` with a code
-like `ogn-011`, which works. This is a known limitation documented
-in IMPLEMENTATION_PLAN.md §6; the fix lives in the bot, not here.
+The `/cards/{id}` route matches on `riftbound_id` (e.g. `ogn-011`), not on an opaque internal ID. If your consumer was built against an API that used UUIDs or any other internal ID scheme, the lookup-by-id methods will 404. Switch the consumer to pass the `riftbound_id` (a stable, human-readable code like `ogn-011` or `ven-001`) to `/cards/{id}` or `/cards/riftbound/{id}`.
 
 ### /cards/search returns nothing for a query that should match
 

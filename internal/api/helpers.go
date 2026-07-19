@@ -24,7 +24,7 @@ func writeRawJSON(w http.ResponseWriter, status int, body []byte) {
 }
 
 // writeError sends a structured error response. The shape matches
-// the riftcodex convention of {error, message} so the bot's adapter
+// the standard {error, message} shape so any consumer can
 // can parse it uniformly.
 func writeError(w http.ResponseWriter, status int, message string) {
 	writeJSON(w, status, map[string]any{

@@ -1,5 +1,5 @@
 // Package api implements the HTTP surface of riftapi. The handlers
-// mirror the Riftcodex API documented at https://riftcodex.com/docs/
+// mirror the card data shape from the upstream gallery.
 // (the source of truth for the wire format).
 //
 // The package is laid out by endpoint family:

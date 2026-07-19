@@ -2,10 +2,10 @@
 //
 // This file is the third seam in the package: the per-card transform
 // from the upstream's shape (defined by the data we extract from
-// __NEXT_DATA__) into the Riftcodex wire format (defined by
-// /home/xalevagre7/code/riftbot/RIFTCODEX_API.md). The field-by-field
-// recipe is in docs/IMPLEMENTATION_PLAN.md §2 and the upstream
-// shape is in docs/research/playriftbound-card-gallery.md §2.
+// __NEXT_DATA__) into the local card data wire format. The
+// field-by-field recipe is in docs/IMPLEMENTATION_PLAN.md §2 and
+// the upstream shape is in docs/research/playriftbound-card-gallery.md
+// §2.
 //
 // The transformer's contract is fully covered by transform_test.go.
 // Changes here should be driven by a failing test, not by drift in
@@ -112,7 +112,7 @@ type galleryTags struct {
 // --- transform -------------------------------------------------------------
 
 // TransformCard converts a single gallery card (as raw JSON) into the
-// riftcodex wire shape. The setMaxs map provides per-set collector
+	// wire shape. The setMaxs map provides per-set collector
 // maxima so the transformer can detect overnumbered prints; pass an
 // empty map (not nil) if the caller has not pre-loaded the set
 // metadata. With an empty map the overnumbered flag is conservatively
@@ -183,7 +183,7 @@ func TransformCard(raw []byte, setMaxs map[string]int) (*domain.Card, error) {
 }
 
 // deriveRiftboundID converts the upstream's id (e.g. "ogn-011-298")
-// into the riftcodex riftbound_id (e.g. "ogn-011"). The trailing
+	// into the riftbound_id (e.g. "ogn-011"). The trailing
 // "-{setMax}" segment is stripped. For alternate arts (e.g.
 // "ogn-066a-298") the trailing letter is preserved.
 //
@@ -215,7 +215,7 @@ func firstLabelPtr(items []galleryNamedItem) *string {
 }
 
 // domainLabels returns the label of each named item, or an empty slice
-// (not nil) when the input is empty — the riftcodex contract uses
+	// (not nil) when the input is empty — the contract uses
 // `[]` rather than `null` for empty domain arrays.
 func domainLabels(items []galleryNamedItem) []string {
 	out := make([]string, 0, len(items))
@@ -294,7 +294,7 @@ var htmlEntityRE = regexp.MustCompile(`&(amp|lt|gt|quot|#39);`)
 // stripHTML removes HTML tags and decodes the common entities from s.
 // Runs of whitespace (including those left by stripped tags) are
 // collapsed to a single space and the result is trimmed. Suitable
-// for the riftcodex text.plain field.
+	// for the text.plain field.
 func stripHTML(s string) string {
 	s = htmlTagRE.ReplaceAllString(s, "")
 	s = htmlEntityRE.ReplaceAllStringFunc(s, func(m string) string {
@@ -319,7 +319,7 @@ func stripHTML(s string) string {
 // with word-separating punctuation (commas, periods, semicolons,
 // parentheses) replaced by spaces, and intra-word marks (apostrophes,
 // hyphens that join words in TCG names like "Kai'Sa") stripped
-// entirely. Runs of whitespace are collapsed. Used for the riftcodex
+	// entirely. Runs of whitespace are collapsed. Used for the
 // metadata.clean_name field.
 //
 //   "Abandon"              → "abandon"
@@ -375,7 +375,7 @@ func isAlternateArt(riftboundID string) bool {
 }
 
 // hasSignatureSuperType reports whether items contains an entry with
-// id "signature". The riftcodex metadata.signature flag is derived
+	// id "signature". The metadata.signature flag is derived
 // from this — the gallery does not expose the flag directly.
 func hasSignatureSuperType(items []galleryNamedItem) bool {
 	for _, it := range items {

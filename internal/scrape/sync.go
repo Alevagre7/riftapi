@@ -177,7 +177,7 @@ func (s *Syncer) fail(ctx context.Context, err error) error {
 // upsertSets writes one row per set seen in this run. TCGPlayerID,
 // CardmarketID, and PublishedOn are always nil — the gallery does
 // not provide them (ADR-0001) and the Set's ID is the set_id (we
-// don't have riftcodex UUIDs).
+	// don't have opaque internal UUIDs).
 func (s *Syncer) upsertSets(ctx context.Context, sets map[string]*setMeta) error {
 	if len(sets) == 0 {
 		return nil

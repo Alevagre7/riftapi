@@ -8,7 +8,7 @@ import (
 )
 
 // SetRow is the database-level representation of a Set. The full
-// riftcodex Set JSON is in Payload; the indexed fields are the
+// Set JSON is in Payload; the indexed fields are the
 // primary key (SetID) and the denormalised CardCount.
 type SetRow struct {
 	SetID     string
@@ -40,7 +40,7 @@ func (r *SetRepo) Upsert(ctx context.Context, row SetRow) error {
 
 // GetByID returns the set with the given set_id (e.g. "ogn") or
 // sql.ErrNoRows if no such set exists. The match is case-insensitive;
-// set_ids are conventionally lowercase but the riftcodex contract
+	// set_ids are conventionally lowercase but the contract
 // permits any case.
 func (r *SetRepo) GetByID(ctx context.Context, setID string) (*SetRow, error) {
 	const q = `SELECT set_id, card_count, payload FROM sets WHERE set_id = ? COLLATE NOCASE`

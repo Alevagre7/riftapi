@@ -1,6 +1,6 @@
 # Implementation Plan
 
-Phased build order for `riftapi`, the self-hosted read-only HTTP API that mirrors the [Riftcodex](https://riftcodex.com/docs/) JSON shape for the Riftbound TCG.
+Phased build order for `riftapi`, the self-hosted read-only HTTP API that serves structured card data for the Riftbound TCG.
 
 This plan is **dependency-ordered**: each phase produces something runnable and verifiable, and later phases assume the outputs of earlier ones. Strategic decisions from the grill are referenced inline by their ADR or CONTEXT.md entry; do not relitigate them during the build.
 
@@ -16,7 +16,7 @@ This plan is **dependency-ordered**: each phase produces something runnable and 
 
 ## Phase 0 — Project skeleton
 
-**Goal**: a Go module that builds a binary, runs in Docker on `linux/arm64`, and lives in a directory layout that supports the rest of the plan.
+**Goal**: a Go module that builds two self-contained static binaries (one for the API, one for the sync) and lives in a directory layout that supports the rest of the plan. The binaries run anywhere Go 1.22+ can target — bare metal, containers, VMs, or your platform of choice. `docker-compose.yml` and the `deploy/` directory are starting points for one common way to run them, not the only way.
 
 **What you build**:
 - [ ] `go mod init github.com/<you>/riftapi`
@@ -32,7 +32,7 @@ This plan is **dependency-ordered**: each phase produces something runnable and 
   │   ├── scrape/         # upstream client + parser + transformer
   │   ├── api/            # HTTP handlers, routing, response shapes
   │   ├── health/         # health check + Telegram alert
-  │   └── domain/         # Card, Set, Index types (the riftcodex shape)
+  │   └── domain/         # Card, Set, Index types (the card data shape)
   ├── testdata/
   │   └── gallery/        # saved copies of __NEXT_DATA__ HTML for offline tests
   ├── docs/               # CONTEXT.md, ADR, research (already populated)
@@ -48,7 +48,8 @@ This plan is **dependency-ordered**: each phase produces something runnable and 
 
 **Verify**:
 - `make build` produces two binaries.
-- `docker build --platform linux/arm64 .` succeeds.
+- `make build GOOS=linux GOARCH=arm64` (or any other target) cross-compiles cleanly.
+- `docker build .` (or `docker build --platform <arch> .`) succeeds.
 - `docker compose up api` starts a service that responds 200 on a placeholder `/healthz`.
 
 **Implements decisions**: 3 (Go), 10 (server framework: stdlib `net/http`).
@@ -63,14 +64,14 @@ This plan is **dependency-ordered**: each phase produces something runnable and 
 - [ ] `internal/store/migrations/` with forward-only SQL migrations. Use a tiny home-grown migrator (run on startup) or `golang-migrate/migrate` if you prefer the lib.
 - [ ] Schema. The first migration:
   ```sql
-  -- cards: the full riftcodex Card shape, JSON-encoded for flexibility
+  -- cards: the full card JSON, encoded for flexibility
   CREATE TABLE cards (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     riftbound_id TEXT UNIQUE NOT NULL,         -- e.g. 'ogn-011' (the bare form)
     public_code TEXT,                          -- e.g. 'ogn-011-298' when available
     set_id TEXT NOT NULL,                      -- 'OGN', 'UNL', etc.
     collector_number INTEGER NOT NULL,
-    payload JSON NOT NULL,                     -- the full riftcodex Card JSON
+    payload JSON NOT NULL,                     -- the full card JSON
     name TEXT NOT NULL,                        -- denormalised for sort/search
     updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
   );
@@ -95,7 +96,7 @@ This plan is **dependency-ordered**: each phase produces something runnable and 
   );
   INSERT INTO sync_state (id) VALUES (1);
   ```
-- [ ] **Storage decision**: store the *full* riftcodex Card as a JSON blob in `payload` plus a few denormalised columns (`riftbound_id`, `name`, `set_id`, `collector_number`) for indexing. JSON keeps the row ~1 KB and lets the API surface evolve without migrations.
+- [ ] **Storage decision**: store the *full* card data as a JSON blob in `payload` plus a few denormalised columns (`riftbound_id`, `name`, `set_id`, `collector_number`) for indexing. JSON keeps the row ~1 KB and lets the API surface evolve without migrations.
 - [ ] **WAL mode** on every connection: `PRAGMA journal_mode=WAL;` and `PRAGMA synchronous=NORMAL;`. Allows concurrent reads during sync writes.
 - [ ] Repository interface in `internal/store/` (e.g. `CardRepo`, `SetRepo`, `SyncRepo`) with concrete SQLite impls.
 - [ ] Connection management: one `*sql.DB` per process, opened on startup, never closed until shutdown.
@@ -109,18 +110,18 @@ This plan is **dependency-ordered**: each phase produces something runnable and 
 **Implements decisions**: 4 (SQLite), 7 (storage location for the snapshot, indirectly).
 
 **Tactical question to settle here**:
-- DB file location: `/var/lib/riftapi/riftapi.db` (Linux convention, requires root or a dedicated user) or a mounted volume in Docker (`/data/riftapi.db`). Default to `/data/riftapi.db`; let config override.
+- DB file location: configurable via `RIFTAPI_DATABASE_PATH` env var, default `/data/riftapi.db` (a path that works equally well as a Docker volume mount target or a host path like `/var/lib/riftapi/riftapi.db` on a bare-metal install). Pick a path that fits your environment; the only requirement is that the process can read and write the file.
 
 ---
 
 ## Phase 2 — Scraper & sync
 
-**Goal**: a `riftapi-sync` binary that pulls `__NEXT_DATA__` from `playriftbound.com/en-us/card-gallery/`, transforms each card into the riftcodex shape, and writes a fresh snapshot atomically.
+**Goal**: a `riftapi-sync` binary that pulls `__NEXT_DATA__` from `playriftbound.com/en-us/card-gallery/`, transforms each card into the card data shape, and writes a fresh snapshot atomically.
 
 **What you build**:
 - [ ] `internal/scrape/client.go` — single `GET` to the gallery URL with a 30s timeout, 2 retries with exponential backoff, custom `User-Agent` identifying the project (e.g. `riftapi/0.1 (+https://github.com/<you>/riftapi)`). Respect a 1 req/sec rate limit even though the upstream has no documented limit.
 - [ ] `internal/scrape/parse.go` — extract the `__NEXT_DATA__` JSON blob from the response HTML. Use a single regex anchored on `<script id="__NEXT_DATA__" type="application/json">...</script>`. Verify the report's path: `data["props"]["pageProps"]["page"]["blades"][2]["cards"]["items"]`. If that index changes, fail loud (see health check below).
-- [ ] `internal/scrape/transform.go` — gallery card → riftcodex Card. Per [the research report](../research/playriftbound-card-gallery.md) §6, the recipe is:
+- [ ] `internal/scrape/transform.go` — gallery card → card data shape. Per [the research report](../research/playriftbound-card-gallery.md) §6, the recipe is:
   - `riftbound_id` ← strip the trailing `/{total}` from `publicCode` (e.g. `ogn-011-298` → `ogn-011`).
   - `attributes.{energy,might,power}` ← parse the integer out of the gallery's `value.id` (which is a string).
   - `classification.type` ← `cardType.type[0].label`.
@@ -153,7 +154,7 @@ This plan is **dependency-ordered**: each phase produces something runnable and 
   - The report's `__NEXT_DATA__` saved as `testdata/gallery/2026-07-19.html` (or `.json` — save whichever is smaller).
   - A gallery JSON containing at least one alternate art, one overnumbered, and one signature card.
   - A gallery JSON that is *intentionally missing* a required blade index — the parser must fail loud with a clear error.
-- Manual end-to-end: run the binary against live upstream once, inspect the resulting `riftapi.db` with `sqlite3`, confirm a `ogn-011` row exists and its `payload` looks like the riftcodex shape.
+- Manual end-to-end: run the binary against live upstream once, inspect the resulting `riftapi.db` with `sqlite3`, confirm a `ogn-011` row exists and its `payload` looks like the card data shape.
 
 **Implements decisions**: 1, 5, 6, 7, 8 (all the data-source stuff). ADR-0001.
 
@@ -181,25 +182,25 @@ This plan is **dependency-ordered**: each phase produces something runnable and 
 **Implements decisions**: 10 (failure handling).
 
 **Tactical questions to settle here**:
-- Reuse the existing `riftbot` token + a chat ID you control, or create a new "riftapi-notifier" bot? **Default: reuse the riftbot token** — one less bot to manage, the maintainer already has a chat with it.
+- Reuse an existing Telegram bot token (if you have one for the destination) or create a dedicated notifier bot? **Default: dedicated bot** — the maintainer already has the chat with it.
 - Where do the chat ID and token live? **Default: env vars on the host that runs the sync job**, *not* in the API container. Means the API container has no Telegram-related env at all.
 
 ---
 
 ## Phase 4 — MVP API surface (bot-critical)
 
-**Goal**: four endpoints live, returning the riftcodex shape, served by a Go stdlib `net/http` binary in a Docker container on the Pi.
+**Goal**: four endpoints live, returning the card data shape, served by a Go stdlib `net/http` binary on any host.
 
 **What you build**:
 - [ ] `internal/api/server.go` — `http.ServeMux` with a tiny path-param helper (regex capture, ~20 lines). Don't add a router dependency.
 - [ ] `internal/api/cards.go`, `internal/api/index.go`, etc. — handlers, one per endpoint.
-- [ ] Handlers (only the 4 the bot uses today, per [PRODUCT_DESCRIPTION.md](../../riftbot/PRODUCT_DESCRIPTION.md)):
-  - `GET /cards/name?fuzzy=<query>` — case-insensitive `LIKE` on `name` and `clean_name`. Returns an array of Cards (riftcodex returns an array for the single-name match too; respect the shape).
-  - `GET /cards/{id}` — lookup by riftcodex `id` (UUID) **or** `riftbound_id` (the bot's adapter uses the riftcodex UUID, but be liberal — the bot's `card-repository.ts` calls `getCardById(id)` which is the UUID path; the riftbound_id path is separate). Match the riftcodex shape: return one Card or 404.
-  - `GET /cards/riftbound/{id}` — case-insensitive lookup by `riftbound_id` (e.g. `ogn-011`). May return an array (alternate arts share a base id with a letter suffix).
-  - `GET /index/card-names` — `SELECT name FROM cards ORDER BY name`. Returns `{total, type: "card-names", values: [...]}`, matching the riftcodex shape.
-- [ ] Response shape: hand-write the JSON marshaller. The `payload` JSON blob on each row already matches riftcodex; the handlers just unmarshal and re-marshal with proper field ordering. No need for `encoding/json` struct tags acrobatics — `json.RawMessage` round-trips the blob.
-- [ ] Error responses: `{ "error": "<code>", "message": "<human>" }` with 400/404/500/503. Match the riftcodex shape if it has one; check by curling.
+- [ ] Handlers (only the 4 most-used endpoints to start; expand the surface in Phase 5):
+- [ ] `GET /cards/name?fuzzy=<query>` — case-insensitive `LIKE` on `name` and `clean_name`. Returns an array of cards in the search-response shape.
+- [ ] `GET /cards/{id}` — lookup by `riftbound_id` (e.g. `ogn-011`). Returns one card or 404.
+- [ ] `GET /cards/riftbound/{id}` — always 404 (no upstream UUIDs — see ADR-0001).
+- [ ] `GET /index/card-names` — `SELECT name FROM cards ORDER BY name`. Returns `{total, type: "card-names", values: [...]}`.
+- [ ] Response shape: hand-write the JSON marshaller. The `payload` JSON blob on each row already encodes the card data; the handlers just unmarshal and re-marshal with proper field ordering. No need for `encoding/json` struct tags acrobatics — `json.RawMessage` round-trips the blob.
+- [ ] Error responses: `{ "error": "<code>", "message": "<human>" }` with 400/404/500/503. Keep the shape stable so consumers can parse it uniformly.
 - [ ] CORS: open by default (this is a hobby tool, the bot is the only consumer, but allowing browser access doesn't hurt).
 - [ ] Server config: `PORT` (default `8080`), `BIND` (default `0.0.0.0`), `DATABASE_PATH` (default `/data/riftapi.db`).
 - [ ] **Legal Jibber Jabber attribution** (decision 9): add the statement to a `GET /` handler that returns `{name: "riftapi", version: "...", upstream: "playriftbound.com", attribution: "This project was created under Riot Games' 'Legal Jibber Jabber' policy using assets owned by Riot Games. Riot Games does not endorse or sponsor this project."}`. Document in the README too.
@@ -209,56 +210,38 @@ This plan is **dependency-ordered**: each phase produces something runnable and 
 
 **Verify**:
 - `go test ./internal/api/...` with table-driven cases per endpoint: hit each handler with a known fixture DB, assert response shape and status codes.
-- **Contract test**: start the API pointing at a fixture DB, `curl` each of the 4 endpoints, and assert the JSON shape matches a snapshot from the live `api.riftcodex.com` for the same query. (Catches drift in your response shape, which is exactly what would break the bot.)
+- **Contract test**: start the API pointing at a fixture DB, `curl` each of the 4 endpoints, and assert the JSON shape matches a known-good reference for the same query. (Catches drift in your response shape — the most likely source of subtle consumer breakage.)
 - Manual: `docker compose up`, `curl localhost:8080/cards/riftbound/ogn-011`, confirm a card-shaped JSON response.
 
-**Implements decisions**: 2 (full riftcodex mirror — but only 4 endpoints live), 3, 9 (attribution).
+**Implements decisions**: 2 (card data surface — but only 4 endpoints live), 3, 9 (attribution).
 
 ---
 
-## Phase 5 — Full riftcodex mirror
+## Phase 5 — Full card data surface
 
-**Goal**: every endpoint the riftcodex docs describe is implemented and behaves identically for the bot's use cases.
+**Goal**: every endpoint a consumer might reasonably need is implemented.
 
 **What you build**:
-- [ ] The remaining endpoints (in order of how the riftcodex API organises them):
+- [ ] The remaining endpoints (in order of typical use):
   - [ ] `GET /cards?sort=&dir=&set_id=&page=&size=` — paginated list with sort.
   - [ ] `GET /cards/search?query=...` — full-text search on rules text. SQLite FTS5 virtual table indexed on `text.plain` (or the raw `payload`).
-  - [ ] `GET /cards/riftbound/{id}` — already in MVP; verify pagination/array behaviour matches riftcodex.
+  - [ ] `GET /cards/riftbound/{id}` — already in MVP; verify pagination/array behaviour.
   - [ ] `GET /cards/tcgplayer/{id}` — always returns 404 (gallery has no `tcgplayer_id`). Document this.
   - [ ] `GET /sets` — `SELECT * FROM sets`.
-  - [ ] `GET /sets/{id}` — by riftcodex set UUID.
+  - [ ] `GET /sets/{id}` — by opaque internal ID.
   - [ ] `GET /sets/set-id/{set_id}` — by `set_id` (e.g. `ogn`).
   - [ ] `GET /sets/tcgplayer/{id}`, `GET /sets/cardmarket/{id}` — always 404, same reason.
   - [ ] `GET /index/keywords`, `/types`, `/supertypes`, `/domains`, `/rarities`, `/artists`, `/energy`, `/might`, `/power`, `/tags` — `SELECT DISTINCT` on the relevant field, return the same `{total, type, values}` shape.
-- [ ] Pagination: match riftcodex defaults (`page` default 1, `size` default 50, max 100). Return `{items, total, page, size, pages}` for paginated endpoints.
+- [ ] Pagination: `page` default 1, `size` default 50, max 100. Return `{items, total, page, size, pages}` for paginated endpoints.
 
 **Verify**:
-- Same contract test as Phase 4, but now covering *every* endpoint against the live riftcodex for at least one query each.
-- Bot smoke test: temporarily point `riftbot`'s `RIFTCODEX_BASE_URL` at the local API, run the test checklist from [PRODUCT_DESCRIPTION.md](../../riftbot/PRODUCT_DESCRIPTION.md) §"Testing Checklist", confirm every test passes.
+- Same contract test as Phase 4, but now covering *every* endpoint against a known-good reference for at least one query each.
+- Consumer smoke test: point at least one real consumer at the local API and run its standard test checklist. Confirm every test passes.
 
 **Implements decisions**: 2 (full mirror complete).
 
 ---
 
-## Phase 6 — Bot cutover
-
-**Goal**: the bot talks to the local API; the public `api.riftcodex.com` is no longer in the critical path.
-
-**What you build** (in `../riftbot`):
-- [ ] Set `RIFTCODEX_BASE_URL` to the new API's URL (e.g. `https://riftapi.lan`).
-- [ ] No code changes: the bot's `RiftcodexAdapter` Zod schemas already validate the response shape. If anything in the local API's shape drifts, the bot will fail loud at parse time — exactly what you want.
-- [ ] Run the test checklist from PRODUCT_DESCRIPTION.md end-to-end.
-- [ ] Monitor for 48 hours; if the bot behaves identically, declare cutover complete.
-- [ ] Optional follow-up: keep the riftcodex adapter as a *fallback* if the local API returns 5xx. This is a small change to `RiftcodexAdapter` and reintroduces a runtime upstream dependency — make it opt-in via env var, default off.
-
-**Verify**:
-- Bot behaves identically on the local API vs the live `api.riftcodex.com` for the test checklist.
-- `/health` returns 200; alerts work; one full spoiler-season sync run.
-
-**Implements decisions**: 12 (bot integration, finally).
-
----
 
 ## Phase 7 — Ops & hardening
 
@@ -307,7 +290,7 @@ These are decisions that were intentionally deferred during the strategic grill 
 |---|---|---|
 | 1 | DB file location | `/data/riftapi.db` (mounted Docker volume) |
 | 2 | Archive raw upstream JSON to `testdata/`? | Yes, gated by `--archive` flag |
-| 3 | Reuse riftbot token vs new notifier bot? | Reuse the riftbot token; admin chat ID is a new env var |
+| 3 | Reuse an existing Telegram bot token vs new notifier bot? | Dedicated notifier bot; admin chat ID is a new env var |
 | 3 | Where do Telegram env vars live? | On the host running the sync job, not in the API container |
 | 4 | `text.flavour` heuristic? | No — leave as `null` (ADR-0001) |
 | 7 | Timer on host vs in a sidecar container? | Sidecar — keeps the API and sync in one `docker compose` |
@@ -321,7 +304,7 @@ If a default doesn't fit when you get there, change it; update this table or the
 ## Testing approach
 
 **Test-first** for:
-- `internal/scrape/transform.go` — the gallery → riftcodex transform. Many edge cases (alternate arts, overnumbered, missing fields, superType arrays of varying length, empty `tags`).
+- `internal/scrape/transform.go` — the gallery → card-data transform. Many edge cases (alternate arts, overnumbered, missing fields, superType arrays of varying length, empty `tags`).
 - `internal/api/*` — the contract tests. The response shape is the integration boundary with the bot; one silent field rename breaks the bot at runtime.
 
 **After-the-fact** for:
@@ -334,8 +317,8 @@ If a default doesn't fit when you get there, change it; update this table or the
 - A reduced gallery with one of each edge case: alternate art, overnumbered, signature, missing superType, empty tags, missing `text`, missing image.
 
 **Contract tests** (in `internal/api/contract_test.go`):
-- A test that runs the local API against a fixture DB and compares each endpoint's response to a snapshot from the live `api.riftcodex.com`. Skip on CI by default; run locally before each release.
-- A test that runs the upstream *riftcodex* against the same query, compares the local API's response, fails on any field-level diff.
+- A test that runs the local API against a fixture DB and compares each endpoint's response to a known-good reference. Skip on CI by default; run locally before each release.
+- A test that runs the upstream *playriftbound* against the same query, compares the local API's response, fails on any field-level diff.
 
 ---
 
@@ -347,7 +330,7 @@ If a default doesn't fit when you get there, change it; update this table or the
 | 1 | `go test ./internal/store/...` green; manual sqlite3 check |
 | 2 | `go test ./internal/scrape/...` green with all fixtures; live scrape produces a DB with `ogn-011` |
 | 3 | Telegram alert test green; `/health` returns 200 on a clean DB, 503 on a stale one |
-| 4 | All 4 bot-critical endpoints respond with the riftcodex shape; contract test green |
-| 5 | All riftcodex endpoints respond; full contract test suite green |
+| 4 | All 4 most-used endpoints respond with the card data shape; contract test green |
+| 5 | All endpoints respond; full contract test suite green |
 | 6 | Bot test checklist passes for 48 hours |
 | 7 | Runbook is written and exercised once |

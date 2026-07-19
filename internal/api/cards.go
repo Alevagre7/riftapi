@@ -12,7 +12,7 @@ import (
 
 // registerCardRoutes mounts the /cards/* handlers. Phase 4 wires up
 // the four endpoints the bot currently uses; Phase 5 adds the
-// remaining riftcodex endpoints (list, search, tcgplayer).
+// remaining card data endpoints (list, search, tcgplayer).
 func (s *Server) registerCardRoutes(mux *http.ServeMux) {
 	// Phase 5: list + search + tcgplayer (the last is always 404).
 	mux.HandleFunc("GET /cards", s.listCards)
@@ -25,7 +25,7 @@ func (s *Server) registerCardRoutes(mux *http.ServeMux) {
 }
 
 // listCardsByName handles GET /cards/name?fuzzy=X or ?exact=X.
-// Returns the riftcodex SearchResponse shape: {items, total, page,
+// Returns the search-response shape: {items, total, page,
 // size, pages}. The {page, size, pages} fields are always 1 here
 // because the local store is small and pagination is not exposed
 // (Phase 5's /cards list endpoint will add it).
@@ -39,7 +39,7 @@ func (s *Server) listCardsByName(w http.ResponseWriter, r *http.Request) {
 		if err != nil {
 			if errors.Is(err, sql.ErrNoRows) {
 				// Exact lookup with no match: return an empty
-				// search response (the riftcodex API returns
+				// search response (the upstream API returns
 				// total=0 in this case).
 				writeJSON(w, http.StatusOK, map[string]any{
 					"items": []json.RawMessage{},
@@ -81,7 +81,7 @@ func (s *Server) listCardsByName(w http.ResponseWriter, r *http.Request) {
 }
 
 // getCardByID handles GET /cards/{id}. The path parameter is matched
-// against the local store's riftbound_id (we don't have riftcodex
+// against the local store's riftbound_id (we don't have opaque internal
 // UUIDs). Returns the Card JSON directly on success, 404 if not
 // found.
 func (s *Server) getCardByID(w http.ResponseWriter, r *http.Request) {
@@ -105,7 +105,7 @@ func (s *Server) getCardByID(w http.ResponseWriter, r *http.Request) {
 }
 
 // getCardsByRiftboundID handles GET /cards/riftbound/{id}. The
-// riftcodex contract returns an array (alternate arts may share a
+// contract returns an array (alternate arts may share a
 // base id; we use the trailing letter in the riftbound_id to
 // distinguish them, so in practice a single id matches at most one
 // row — but the array shape is preserved for forward compatibility).

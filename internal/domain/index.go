@@ -11,8 +11,8 @@ type Index struct {
 	Values []IndexValue `json:"values"`
 }
 
-// IndexValue is one entry in an Index's Values list. The riftcodex wire
-// format permits either a string or an integer, so we carry a separate
+// IndexValue is one entry in an Index's Values list. The wire format
+// permits either a string or an integer, so we carry a separate
 // pointer for each kind and pick the right one in MarshalJSON. Exactly
 // one of StringValue / IntValue is set on a valid value.
 type IndexValue struct {
@@ -31,8 +31,8 @@ func IntIndexValue(n int) IndexValue {
 }
 
 // MarshalJSON emits the value as a string, an integer, or null, matching
-// the riftcodex wire format. Exactly one of StringValue / IntValue is
-// expected to be set; if neither is, the output is null.
+// the wire format. Exactly one of StringValue / IntValue is expected
+// to be set; if neither is, the output is null.
 func (v IndexValue) MarshalJSON() ([]byte, error) {
 	switch {
 	case v.StringValue != nil:

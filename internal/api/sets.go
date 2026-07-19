@@ -10,7 +10,7 @@ import (
 	"github.com/xalevagre7/riftapi/internal/store"
 )
 
-// registerSetRoutes mounts the /sets/* handlers. The riftcodex
+// registerSetRoutes mounts the /sets/* handlers. The upstream
 // surface includes five set endpoints; the gallery does not expose
 // UUIDs, tcgplayer_id, or cardmarket_id, so the lookup-by-id and
 // the two id-based lookups are always 404. /sets and
@@ -25,7 +25,7 @@ func (s *Server) registerSetRoutes(mux *http.ServeMux) {
 }
 
 // listSets handles GET /sets?page=&size=. Response is the
-// riftcodex SearchResponse shape: {items, total, page, size, pages}.
+// search-response shape: {items, total, page, size, pages}.
 func (s *Server) listSets(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
 	page, _ := strconv.Atoi(q.Get("page"))
@@ -71,7 +71,7 @@ func (s *Server) getSetBySetID(w http.ResponseWriter, r *http.Request) {
 	writeRawJSON(w, http.StatusOK, row.Payload)
 }
 
-// getSetByID handles GET /sets/{id}. The riftcodex id is a UUID;
+// getSetByID handles GET /sets/{id}. The upstream id is a UUID;
 // we don't have those (the gallery does not expose them), so the
 // endpoint always 404s.
 func (s *Server) getSetByID(w http.ResponseWriter, _ *http.Request) {

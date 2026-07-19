@@ -1,5 +1,5 @@
 // Package scrape fetches the upstream card gallery from
-// playriftbound.com and transforms it into the Riftcodex JSON shape.
+// playriftbound.com and transforms it into the card data shape.
 //
 // The package has four layers, each at a single seam:
 //

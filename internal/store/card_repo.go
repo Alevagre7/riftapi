@@ -12,7 +12,7 @@ import (
 )
 
 // CardRow is the database-level representation of a Card. The full
-// riftcodex Card JSON lives in Payload as raw bytes; the other fields
+// card JSON lives in Payload as raw bytes; the other fields
 // are the denormalised columns that the API indexes on.
 type CardRow struct {
 	RiftboundID     string
@@ -113,7 +113,7 @@ func (r *CardRepo) args(row CardRow) []any {
 
 // GetByRiftboundID returns the card with the given riftbound_id (e.g.
 // "ogn-011") or sql.ErrNoRows if no such card exists. The match is
-// case-insensitive; the riftcodex wire format is case-sensitive but
+	// case-insensitive; the wire format is case-sensitive but
 // the bot's existing adapter is liberal in this regard.
 func (r *CardRepo) GetByRiftboundID(ctx context.Context, id string) (*CardRow, error) {
 	const q = `
@@ -208,7 +208,7 @@ type ListCardsOptions struct {
 // List returns cards matching the filter (set_id, sort, page, size),
 // paginated. Returns the rows, the total count before pagination,
 // and any error. The total is the count of rows matching the
-// filter, matching the riftcodex SearchResponse.total field.
+	// filter, matching the search-response total field.
 func (r *CardRepo) List(ctx context.Context, opts ListCardsOptions) ([]*CardRow, int, error) {
 	return r.queryCards(ctx, opts, "")
 }
@@ -424,7 +424,7 @@ func scanCardRow(s rowScanner) (*CardRow, error) {
 }
 
 // EncodeCard serialises a domain.Card to the JSON blob stored in the
-// payload column. The JSON is the riftcodex wire format verbatim.
+// payload column. The JSON is the card data wire format verbatim.
 // Used by the scraper (Phase 2) before Upsert.
 func EncodeCard(c *domain.Card) ([]byte, error) {
 	return json.Marshal(c)

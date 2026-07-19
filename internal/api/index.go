@@ -8,7 +8,7 @@ import (
 
 // registerIndexRoutes mounts the /index/* handlers. Phase 4 ships
 // /index/card-names (the one the bot uses for /random); Phase 5
-// adds the other riftcodex index endpoints. /index/keywords is
+// adds the other index endpoints. /index/keywords is
 // intentionally omitted — it would require text parsing of card
 // text to extract [Keyword] tokens, which is out of scope.
 func (s *Server) registerIndexRoutes(mux *http.ServeMux) {
@@ -44,7 +44,7 @@ func (s *Server) registerIndexRoutes(mux *http.ServeMux) {
 }
 
 // indexCardNames handles GET /index/card-names. Returns the
-// riftcodex Index shape: {total, type, values}. The values are
+// index response shape: {total, type, values}. The values are
 // sorted alphabetically and are strings.
 func (s *Server) indexCardNames(w http.ResponseWriter, r *http.Request) {
 	names, err := s.store.Cards().ListNames(r.Context())

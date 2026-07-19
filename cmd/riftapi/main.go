@@ -1,5 +1,5 @@
-// riftapi is the read-only HTTP API server. It serves the Riftcodex
-// JSON shape from a local SQLite snapshot, populated by riftapi-sync.
+// riftapi is the read-only HTTP API server. It serves the card data
+// from a local SQLite snapshot, populated by riftapi-sync.
 //
 // The binary owns no secrets (no Telegram token, no upstream API key);
 // the only inputs are a database path, a bind address, and a port.

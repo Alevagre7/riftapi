@@ -54,7 +54,7 @@ func TestTransformCard_HappyPath(t *testing.T) {
 		t.Errorf("RiftboundID = %q, want ogn-011", card.RiftboundID)
 	}
 	if card.ID != "ogn-011" {
-		t.Errorf("ID = %q, want ogn-011 (riftbound_id reused for the riftcodex id field)", card.ID)
+		t.Errorf("ID = %q, want ogn-011 (riftbound_id used as the id field)", card.ID)
 	}
 	if card.CollectorNumber != 11 {
 		t.Errorf("CollectorNumber = %d, want 11", card.CollectorNumber)
@@ -384,7 +384,7 @@ func TestTransformCard_NoDomains(t *testing.T) {
 		t.Fatalf("TransformCard: %v", err)
 	}
 	if card.Classification.Domain == nil {
-		t.Fatalf("Domain = nil, want non-nil (riftcodex contract defaults to [])")
+		t.Fatalf("Domain = nil, want non-nil (contract defaults to [])")
 	}
 	if len(card.Classification.Domain) != 0 {
 		t.Errorf("Domain = %v, want []", card.Classification.Domain)
@@ -437,7 +437,7 @@ func TestTransformCard_PopulatesPublicCode(t *testing.T) {
 
 func TestTransformCard_PublicCodeExcludedFromJSON(t *testing.T) {
 	// PublicCode is stored in the database but is not part of the
-	// riftcodex wire format. It must be excluded from any JSON the
+	// wire format. It must be excluded from any JSON the
 	// API serves.
 	card, err := scrape.TransformCard([]byte(buildCardJSON()), map[string]int{"OGN": 298})
 	if err != nil {

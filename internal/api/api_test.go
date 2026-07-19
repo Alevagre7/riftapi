@@ -74,7 +74,7 @@ func seedStore(t *testing.T) *store.Store {
 	return st
 }
 
-// buildCardRow returns a CardRow with a valid riftcodex-shaped
+// buildCardRow returns a CardRow with a valid card-data-shaped
 // payload for a sample card.
 func buildCardRow(t *testing.T, c sampleCard) store.CardRow {
 	t.Helper()

@@ -1,18 +1,16 @@
 // Package domain contains the typed shapes of the data the API serves and
-// the scraper produces. These types mirror the Riftcodex JSON contract
-// documented in /home/xalevagre7/code/riftbot/RIFTCODEX_API.md; field
-// names use the exact riftcodex spelling (snake_case) so json.Marshal
-// output matches upstream byte-for-byte.
+// the scraper produces. Field names use snake_case to match the
+// upstream gallery's JSON output byte-for-byte.
 //
 // The shapes are intentionally close to the wire format — there is no
 // transformation layer between "what the database stores" and "what the
-// API returns" beyond json.Marshal. If a field is nullable in riftcodex,
-// it is a pointer here so that the JSON output preserves the null vs
-// missing distinction.
+// API returns" beyond json.Marshal. If a field is nullable in the
+// upstream data, it is a pointer here so that the JSON output
+// preserves the null vs missing distinction.
 package domain
 
-// Card is a single print of a Riftbound card, in the Riftcodex shape.
-// See CONTEXT.md for the domain definition and ADR-0001 for the source.
+// Card is a single print of a Riftbound card. See CONTEXT.md for the
+// domain definition and ADR-0001 for the source.
 type Card struct {
 	ID              string         `json:"id"`
 	Name            string         `json:"name"`
@@ -29,15 +27,15 @@ type Card struct {
 	Metadata        Metadata       `json:"metadata"`
 
 	// PublicCode is the suffixed form of the riftbound_id (e.g.
-	// "ogn-011-298") as provided by the upstream. It is not part of
-	// the riftcodex wire format — the field is excluded from JSON
-	// output — but it is stored in the cards.public_code column for
-	// forward use and easy cross-reference with the upstream.
+	// "ogn-011-298") as provided by the upstream. It is excluded
+	// from JSON output (`json:"-"`) but is stored in the
+	// cards.public_code column for forward use and easy cross-reference
+	// with the upstream.
 	PublicCode string `json:"-"`
 }
 
 // Attributes are the numeric gameplay stats on a Card. All three are
-// nullable in the riftcodex shape (only Units have might/power, only
+// nullable in the upstream data (only Units have might/power, only
 // things with a cost have energy).
 type Attributes struct {
 	Energy *int `json:"energy"`

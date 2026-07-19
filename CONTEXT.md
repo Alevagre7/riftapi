@@ -1,6 +1,6 @@
 # RiftAPI Context
 
-Self-hosted read-only HTTP API that mirrors the [Riftcodex](https://riftcodex.com/docs/) JSON shape for the Riftbound TCG. Runs on a Raspberry Pi 3B inside a Docker container. Data is populated by scraping `playriftbound.com` and stored in a local SQLite database. The API serves requests without calling any upstream at request time.
+Self-hosted read-only HTTP API that serves structured card data for the Riftbound TCG. Data is populated by scraping `playriftbound.com` and stored in a local SQLite database. The API serves requests without calling any upstream at request time. The two binaries are self-contained static Go programs and run on any host that can reach the upstream and listen on a TCP port.
 
 ## Language
 
@@ -26,7 +26,7 @@ _Avoid_: "Card number", "Index"
 
 **Alternate Art**:
 A Card that shares its name and rules with another Card but has different artwork. In the local store, alternate arts are derived from the gallery by inspecting the trailing letter in the Riftbound ID (e.g. `ogn-066a` is the alternate art of `ogn-066`).
-_Avoid_: "Alt art" (inconsistent with the Riftcodex schema's `alternate_art` field name)
+_Avoid_: "Alt art" (inconsistent with the canonical `alternate_art` field name)
 
 **Spoiler Season**:
 The 2–4 week window between an expansion's public announcement and its official release, during which new cards are revealed one or a few at a time. The project's nightly sync is *enabled* during Spoiler Season and *disabled* by default at all other times. The store is therefore stable between expansions and refreshed only when the bot maintainer explicitly enables the sync.

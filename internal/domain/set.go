@@ -1,9 +1,8 @@
 package domain
 
-// Set is a group of Cards released together as a single product. This
-// is the full Riftcodex Set shape; the embedded CardCount, TCGPlayerID,
-// CardmarketID, and PublishedOn fields are nullable because the gallery
-// does not provide them.
+// Set is a group of Cards released together as a single product. The
+// embedded CardCount, TCGPlayerID, CardmarketID, and PublishedOn
+// fields are nullable because the gallery does not provide them.
 type Set struct {
 	ID           string   `json:"id"`
 	Name         string   `json:"name"`

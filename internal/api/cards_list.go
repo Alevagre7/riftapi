@@ -11,7 +11,7 @@ import (
 
 // listCards handles GET /cards?sort=&dir=&set_id=&page=&size=.
 // Returns a paginated list of cards. Response shape is the
-// riftcodex SearchResponse: {items, total, page, size, pages}.
+// search-response shape: {items, total, page, size, pages}.
 func (s *Server) listCards(w http.ResponseWriter, r *http.Request) {
 	opts := parseListOptions(r)
 	rows, total, err := s.store.Cards().List(r.Context(), opts)
@@ -23,7 +23,7 @@ func (s *Server) listCards(w http.ResponseWriter, r *http.Request) {
 }
 
 // searchCards handles GET /cards/search?query=&sort=&dir=&set_id=&page=&size=.
-// Full-text search on text.plain. Response shape is the riftcodex
+// Full-text search on text.plain. Response shape is the search-response
 // SearchResponse.
 func (s *Server) searchCards(w http.ResponseWriter, r *http.Request) {
 	query := strings.TrimSpace(r.URL.Query().Get("query"))
@@ -65,7 +65,7 @@ func parseListOptions(r *http.Request) store.ListCardsOptions {
 	}
 }
 
-// writeSearchResponse writes the riftcodex SearchResponse shape
+// writeSearchResponse writes the search-response shape
 // (items, total, page, size, pages) with the supplied rows and
 // total. The page/size in the response are normalised to the
 // store's clamping (1, 50, 100) so the client can rely on the
