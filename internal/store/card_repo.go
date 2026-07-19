@@ -180,6 +180,19 @@ func (r *CardRepo) Count(ctx context.Context) (int, error) {
 	return n, err
 }
 
+// GetRandomCard returns one card chosen uniformly at random from the
+// store, or sql.ErrNoRows if the store is empty. The implementation
+// uses SQLite's ORDER BY RANDOM() LIMIT 1, which is fine for the
+// local store (~1.2k rows) and avoids the alternative of a
+// count-and-offset dance. Used by the /cards/random endpoint.
+func (r *CardRepo) GetRandomCard(ctx context.Context) (*CardRow, error) {
+	const q = `
+		SELECT riftbound_id, public_code, set_id, collector_number, name, clean_name, payload
+		FROM cards ORDER BY RANDOM() LIMIT 1
+	`
+	return r.scanOne(ctx, q)
+}
+
 // All returns every card in the store. Intended for tests and the
 // scraper's full-replace mode; not for the API surface.
 func (r *CardRepo) All(ctx context.Context) ([]*CardRow, error) {

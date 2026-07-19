@@ -398,6 +398,43 @@ func TestCardByID(t *testing.T) {
 	}
 }
 
+// --- GET /cards/random ----------------------------------------------------
+
+func TestCardRandom(t *testing.T) {
+	srv := newTestServer(t)
+	// Call repeatedly and assert we see at least two distinct ids
+	// from the seeded set across N calls. Strict-uniformity tests
+	// are flaky and meaningless; we only assert the function is
+	// actually picking from the seed.
+	seen := make(map[string]bool)
+	for i := 0; i < 50; i++ {
+		rr := do(t, srv, "/cards/random")
+		if rr.Code != http.StatusOK {
+			t.Fatalf("status = %d, want 200 (body=%s)", rr.Code, rr.Body.String())
+		}
+		var body map[string]any
+		if err := json.NewDecoder(rr.Body).Decode(&body); err != nil {
+			t.Fatalf("decode: %v", err)
+		}
+		id, _ := body["riftbound_id"].(string)
+		if id == "" {
+			t.Fatalf("missing riftbound_id in body: %v", body)
+		}
+		seen[id] = true
+	}
+	if len(seen) < 2 {
+		t.Errorf("only %d distinct ids in 50 calls, want at least 2", len(seen))
+	}
+	// Empty store: 404 with the documented message.
+	emptySrv := api.NewServer(newTestStore(t))
+	req := httptest.NewRequest(http.MethodGet, "/cards/random", nil)
+	rr := httptest.NewRecorder()
+	emptySrv.Routes().ServeHTTP(rr, req)
+	if rr.Code != http.StatusNotFound {
+		t.Errorf("empty store: status = %d, want 404 (body=%s)", rr.Code, rr.Body.String())
+	}
+}
+
 // --- GET /cards/riftbound/{id} --------------------------------------------
 
 func TestCardsByRiftboundID(t *testing.T) {

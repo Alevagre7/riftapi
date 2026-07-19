@@ -64,9 +64,50 @@ type galleryCardType struct {
 }
 
 type galleryNamedItem struct {
-	ID    string `json:"id"`
+	ID    string `json:"-"`
 	Label string `json:"label"`
-	Icon  string `json:"icon,omitempty"`
+	// Icon is the upstream's icon object. The local wire format
+	// does not carry icon URLs, so this is unmarshalled-and-dropped.
+	// The field is typed as an empty struct so any object shape
+	// (string, object) parses without error; if the upstream ever
+	// starts requiring data from this field, lift the relevant
+	// fields into a typed struct here.
+	Icon json.RawMessage `json:"icon,omitempty"`
+}
+
+// UnmarshalJSON accepts id as either a string (the historical shape
+// for rarity, type, domain, set, supertype, etc.) or a number (the
+// current shape for stat values like energy=2, might=3). The struct's
+// ID is always normalised to a string so the rest of the transformer
+// can compare against string literals without per-field special cases.
+// Icon is left as the raw JSON because we never read it.
+func (g *galleryNamedItem) UnmarshalJSON(data []byte) error {
+	type wire struct {
+		ID    json.RawMessage `json:"id"`
+		Label string          `json:"label"`
+		Icon  json.RawMessage `json:"icon"`
+	}
+	var w wire
+	if err := json.Unmarshal(data, &w); err != nil {
+		return err
+	}
+	g.Label = w.Label
+	g.Icon = w.Icon
+	if len(w.ID) == 0 {
+		g.ID = ""
+		return nil
+	}
+	var s string
+	if err := json.Unmarshal(w.ID, &s); err == nil {
+		g.ID = s
+		return nil
+	}
+	var n json.Number
+	if err := json.Unmarshal(w.ID, &n); err == nil {
+		g.ID = n.String()
+		return nil
+	}
+	return fmt.Errorf("galleryNamedItem: id %s is neither string nor number", string(w.ID))
 }
 
 type galleryRarity struct {
@@ -255,19 +296,19 @@ func buildAttributes(energy, might, power *galleryStat) *domain.Attributes {
 	var a domain.Attributes
 	set := false
 	if energy != nil {
-		if n, err := strconv.Atoi(energy.Value.ID); err == nil {
+		if n, err := strconv.Atoi(energy.Value.Label); err == nil {
 			a.Energy = &n
 			set = true
 		}
 	}
 	if might != nil {
-		if n, err := strconv.Atoi(might.Value.ID); err == nil {
+		if n, err := strconv.Atoi(might.Value.Label); err == nil {
 			a.Might = &n
 			set = true
 		}
 	}
 	if power != nil {
-		if n, err := strconv.Atoi(power.Value.ID); err == nil {
+		if n, err := strconv.Atoi(power.Value.Label); err == nil {
 			a.Power = &n
 			set = true
 		}

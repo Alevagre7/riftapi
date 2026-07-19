@@ -343,6 +343,45 @@ func TestCardRepo_Count(t *testing.T) {
 	}
 }
 
+func TestCardRepo_GetRandomCard(t *testing.T) {
+	s := newTestStore(t)
+	repo := store.NewCardRepo(s.DB())
+	ctx := context.Background()
+
+	// Empty store: ErrNoRows, not a panic.
+	if _, err := repo.GetRandomCard(ctx); !errors.Is(err, sql.ErrNoRows) {
+		t.Errorf("empty store: GetRandomCard = %v, want sql.ErrNoRows", err)
+	}
+
+	// Seed three cards and call repeatedly. Across N calls we
+	// expect to see at least two distinct ids — strict-uniformity
+	// tests are flaky and meaningless; we only assert that the
+	// function is actually picking from the seed.
+	ids := []string{"ogn-001", "ogn-002", "ogn-003"}
+	for i, id := range ids {
+		row, _ := sampleCard(t, id, "Name"+strconv.Itoa(i+1), "OGN", i+1)
+		if err := repo.Upsert(ctx, row); err != nil {
+			t.Fatalf("Upsert %s: %v", id, err)
+		}
+	}
+	seen := make(map[string]bool)
+	for i := 0; i < 50; i++ {
+		row, err := repo.GetRandomCard(ctx)
+		if err != nil {
+			t.Fatalf("GetRandomCard: %v", err)
+		}
+		seen[row.RiftboundID] = true
+	}
+	if len(seen) < 2 {
+		t.Errorf("GetRandomCard returned only %d distinct ids in 50 calls, want at least 2", len(seen))
+	}
+	for id := range seen {
+		if !slices.Contains(ids, id) {
+			t.Errorf("GetRandomCard returned unknown id %q", id)
+		}
+	}
+}
+
 // --- SyncCards (transactional replace) ------------------------------------
 
 func TestCardRepo_SyncCards_ReplacesSet(t *testing.T) {

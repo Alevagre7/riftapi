@@ -17,6 +17,7 @@ func (s *Server) registerCardRoutes(mux *http.ServeMux) {
 	// Phase 5: list + search + tcgplayer (the last is always 404).
 	mux.HandleFunc("GET /cards", s.listCards)
 	mux.HandleFunc("GET /cards/search", s.searchCards)
+	mux.HandleFunc("GET /cards/random", s.getRandomCard)
 	mux.HandleFunc("GET /cards/tcgplayer/{id}", s.getCardByTcgPlayerID)
 	// Phase 4: the four endpoints the bot uses today.
 	mux.HandleFunc("GET /cards/name", s.listCardsByName)
@@ -101,6 +102,24 @@ func (s *Server) getCardByID(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	writeRawJSON(w, http.StatusOK, row.Payload)
+}
+
+// getRandomCard handles GET /cards/random. Returns one card chosen
+// uniformly at random from the local store, or 404 if the store is
+// empty. The card JSON is returned directly (same shape as
+// /cards/{id}); the bot's /random command is a one-call flow against
+// this endpoint.
+func (s *Server) getRandomCard(w http.ResponseWriter, r *http.Request) {
+	row, err := s.store.Cards().GetRandomCard(r.Context())
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			writeError(w, http.StatusNotFound, "no cards in store")
+			return
+		}
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
 	writeRawJSON(w, http.StatusOK, row.Payload)
 }
 
