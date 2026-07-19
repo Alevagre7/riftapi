@@ -282,6 +282,59 @@ func TestCardRepo_SearchByName_AlsoMatchesCleanName(t *testing.T) {
 	}
 }
 
+func TestCardRepo_SearchText_MatchesName(t *testing.T) {
+	s := newTestStore(t)
+	repo := store.NewCardRepo(s.DB())
+	ctx := context.Background()
+
+	// Seed a card with a name and a different rules text. The
+	// rules text does NOT contain the name, so the old
+	// name-blind SearchText would have returned 0 for the name
+	// query.
+	row, _ := sampleCard(t, "ogn-011", "Abandon", "OGN", 11)
+	if err := repo.Upsert(ctx, row); err != nil {
+		t.Fatalf("Upsert: %v", err)
+	}
+
+	// Name match: SearchText should find "Abandon" by its name
+	// even though the rules text doesn't contain the word.
+	rows, total, err := repo.SearchText(ctx, "Abandon", store.ListCardsOptions{})
+	if err != nil {
+		t.Fatalf("SearchText: %v", err)
+	}
+	if total != 1 {
+		t.Errorf("SearchText('Abandon') total = %d, want 1 (name match)", total)
+	}
+	if len(rows) != 1 || rows[0].Name != "Abandon" {
+		t.Errorf("SearchText('Abandon') rows = %+v, want [{Name: Abandon}]", rows)
+	}
+
+	// clean_name match: punctuation is stripped from clean_name,
+	// so a query without the comma should still find a name
+	// that has one. ("Ahri, Inquisitive" → clean_name
+	// "ahri inquisitive".)
+	row, _ = sampleCard(t, "ogn-119", "Ahri, Inquisitive", "OGN", 119)
+	if err := repo.Upsert(ctx, row); err != nil {
+		t.Fatalf("Upsert: %v", err)
+	}
+	rows, total, err = repo.SearchText(ctx, "inquisitive", store.ListCardsOptions{})
+	if err != nil {
+		t.Fatalf("SearchText: %v", err)
+	}
+	if total < 1 {
+		t.Errorf("SearchText('inquisitive') total = %d, want >= 1 (clean_name match)", total)
+	}
+
+	// Negative case: a query that matches nothing returns 0.
+	rows, total, err = repo.SearchText(ctx, "nonexistent_word_xyz", store.ListCardsOptions{})
+	if err != nil {
+		t.Fatalf("SearchText: %v", err)
+	}
+	if total != 0 {
+		t.Errorf("SearchText('nonexistent_word_xyz') total = %d, want 0", total)
+	}
+}
+
 func TestCardRepo_SearchByName_RespectsLimit(t *testing.T) {
 	s := newTestStore(t)
 	repo := store.NewCardRepo(s.DB())

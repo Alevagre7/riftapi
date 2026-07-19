@@ -1,0 +1,475 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>riftapi — local test page</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<style>
+  :root {
+    --bg: #0f1115;
+    --panel: #161922;
+    --panel-2: #1d2230;
+    --text: #e6e8ee;
+    --muted: #8a93a6;
+    --accent: #4f8cff;
+    --accent-hover: #6ea1ff;
+    --ok: #46c08a;
+    --warn: #e7b750;
+    --err: #e26d6d;
+    --border: #2a3040;
+    --code: #c5e1ff;
+  }
+  * { box-sizing: border-box; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    margin: 0;
+    padding: 24px;
+    line-height: 1.45;
+  }
+  header {
+    margin-bottom: 24px;
+    border-bottom: 1px solid var(--border);
+    padding-bottom: 16px;
+  }
+  h1 { margin: 0 0 4px 0; font-size: 22px; }
+  .subtitle { color: var(--muted); font-size: 14px; }
+  .base-url {
+    display: inline-block;
+    margin-top: 8px;
+    padding: 4px 10px;
+    background: var(--panel-2);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, monospace;
+    font-size: 13px;
+  }
+  .base-url .label { color: var(--muted); margin-right: 6px; }
+  .base-url input {
+    background: transparent;
+    border: none;
+    color: var(--code);
+    font: inherit;
+    width: 280px;
+  }
+  .base-url input:focus { outline: none; }
+
+  .endpoint {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 16px 18px;
+    margin-bottom: 14px;
+  }
+  .endpoint header {
+    border: none;
+    padding: 0;
+    margin: 0 0 8px 0;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    flex-wrap: wrap;
+  }
+  .method {
+    display: inline-block;
+    padding: 2px 8px;
+    border-radius: 3px;
+    font-size: 12px;
+    font-weight: 600;
+    background: var(--accent);
+    color: #fff;
+    font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, monospace;
+  }
+  .path {
+    font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, monospace;
+    font-size: 15px;
+    color: var(--code);
+  }
+  .desc { color: var(--muted); font-size: 13px; flex-basis: 100%; margin-top: 2px; }
+
+  .controls {
+    display: flex;
+    gap: 8px;
+    align-items: center;
+    flex-wrap: wrap;
+    margin: 10px 0;
+  }
+  .controls label {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 13px;
+    color: var(--muted);
+  }
+  .controls input {
+    background: var(--panel-2);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    color: var(--text);
+    padding: 5px 8px;
+    font: inherit;
+    font-size: 13px;
+    width: 200px;
+  }
+  .controls input:focus { outline: none; border-color: var(--accent); }
+
+  button {
+    background: var(--accent);
+    color: #fff;
+    border: none;
+    border-radius: 4px;
+    padding: 6px 14px;
+    font: inherit;
+    font-size: 13px;
+    font-weight: 500;
+    cursor: pointer;
+  }
+  button:hover { background: var(--accent-hover); }
+  button:disabled { opacity: 0.5; cursor: not-allowed; }
+
+  .result {
+    margin-top: 10px;
+    background: var(--panel-2);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    padding: 10px 12px;
+    font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, monospace;
+    font-size: 12px;
+    color: var(--text);
+    white-space: pre-wrap;
+    word-break: break-word;
+    max-height: 360px;
+    overflow: auto;
+    display: none;
+  }
+  .result.show { display: block; }
+  .result.ok { border-left: 3px solid var(--ok); }
+  .result.warn { border-left: 3px solid var(--warn); }
+  .result.err { border-left: 3px solid var(--err); }
+
+  .meta {
+    color: var(--muted);
+    font-size: 12px;
+    margin-bottom: 6px;
+  }
+  .meta .status { color: var(--text); font-weight: 600; }
+  .meta .ms { color: var(--muted); }
+
+  .card-preview {
+    display: flex;
+    gap: 14px;
+    margin-top: 10px;
+    background: var(--panel-2);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    padding: 10px;
+  }
+  .card-preview img {
+    max-width: 240px;
+    max-height: 336px;
+    border-radius: 4px;
+    object-fit: contain;
+  }
+  .card-preview .info { flex: 1; font-size: 13px; }
+  .card-preview .info h3 { margin: 0 0 4px 0; font-size: 16px; }
+  .card-preview .info .row { color: var(--muted); margin-top: 2px; }
+  .card-preview .info .row strong { color: var(--text); }
+  .card-preview .info .text {
+    margin-top: 8px;
+    color: var(--text);
+    font-size: 12px;
+    line-height: 1.5;
+    max-height: 200px;
+    overflow: auto;
+  }
+</style>
+</head>
+<body>
+
+<header>
+  <h1>riftapi — local test page</h1>
+  <div class="subtitle">Click any endpoint to call the live API at <code>http://127.0.0.1:18080</code></div>
+  <div class="base-url">
+    <span class="label">Base URL:</span>
+    <input id="baseUrl" value="http://127.0.0.1:18080">
+  </div>
+</header>
+
+<!-- Each endpoint is a self-contained card. The pattern is identical:
+     path, optional inputs, Send button, result panel. The card-preview
+     panel is shown only when the response has media.image_url. -->
+
+<section class="endpoint" data-method="GET" data-path="/health">
+  <header>
+    <span class="method">GET</span>
+    <span class="path">/health</span>
+    <span class="desc">Sync health: card count, last sync timestamp, last error.</span>
+  </header>
+  <div class="controls">
+    <button>Send</button>
+  </div>
+  <div class="result"><div class="meta"></div><pre class="body"></pre></div>
+</section>
+
+<section class="endpoint" data-method="GET" data-path="/sets">
+  <header>
+    <span class="method">GET</span>
+    <span class="path">/sets</span>
+    <span class="desc">List all sets (paginated).</span>
+  </header>
+  <div class="controls">
+    <label>size <input data-q="size" value="50" type="number" min="1" max="100"></label>
+    <button>Send</button>
+  </div>
+  <div class="result"><div class="meta"></div><pre class="body"></pre></div>
+</section>
+
+<section class="endpoint" data-method="GET" data-path="/sets/set-id/{set_id}">
+  <header>
+    <span class="method">GET</span>
+    <span class="path">/sets/set-id/{set_id}</span>
+    <span class="desc">Get a single set by its code (e.g. <code>OGN</code>).</span>
+  </header>
+  <div class="controls">
+    <label>set_id <input data-q="set_id" value="OGN" placeholder="OGN, UNL, SFD, VEN, OGS"></label>
+    <button>Send</button>
+  </div>
+  <div class="result"><div class="meta"></div><pre class="body"></pre></div>
+</section>
+
+<section class="endpoint" data-method="GET" data-path="/cards/{riftbound_id}">
+  <header>
+    <span class="method">GET</span>
+    <span class="path">/cards/{riftbound_id}</span>
+    <span class="desc">Get a single card by its riftbound id. The card preview (image + stats) is shown below the JSON.</span>
+  </header>
+  <div class="controls">
+    <label>riftbound_id <input data-q="riftbound_id" value="ogn-011" placeholder="ogn-011, unl-001, sfd-066a"></label>
+    <button>Send</button>
+  </div>
+  <div class="result"><div class="meta"></div><pre class="body"></pre><div class="card-preview" style="display:none"><img alt=""><div class="info"></div></div></div>
+</section>
+
+<section class="endpoint" data-method="GET" data-path="/cards">
+  <header>
+    <span class="method">GET</span>
+    <span class="path">/cards</span>
+    <span class="desc">List cards with filters. <code>set_id</code> optional; <code>size</code> clamps to [1, 100].</span>
+  </header>
+  <div class="controls">
+    <label>set_id <input data-q="set_id" placeholder="OGN (optional)"></label>
+    <label>size <input data-q="size" value="5" type="number" min="1" max="100"></label>
+    <label>sort <input data-q="sort" placeholder="name (optional)"></label>
+    <button>Send</button>
+  </div>
+  <div class="result"><div class="meta"></div><pre class="body"></pre></div>
+</section>
+
+<section class="endpoint" data-method="GET" data-path="/cards/search">
+  <header>
+    <span class="method">GET</span>
+    <span class="path">/cards/search</span>
+    <span class="desc">Search by name (and rules text). Matches the bot's <code>/card</code> command's primary path.</span>
+  </header>
+  <div class="controls">
+    <label>query <input data-q="query" value="Ahri" placeholder="Ahri, magma, counter"></label>
+    <label>size <input data-q="size" value="10" type="number" min="1" max="100"></label>
+    <button>Send</button>
+  </div>
+  <div class="result"><div class="meta"></div><pre class="body"></pre></div>
+</section>
+
+<section class="endpoint" data-method="GET" data-path="/cards/random">
+  <header>
+    <span class="method">GET</span>
+    <span class="path">/cards/random</span>
+    <span class="desc">One card chosen uniformly at random from the local store. The card preview is shown below the JSON.</span>
+  </header>
+  <div class="controls">
+    <button>Send</button>
+  </div>
+  <div class="result"><div class="meta"></div><pre class="body"></pre><div class="card-preview" style="display:none"><img alt=""><div class="info"></div></div></div>
+</section>
+
+<section class="endpoint" data-method="GET" data-path="/cards/riftbound/{riftbound_id}">
+  <header>
+    <span class="method">GET</span>
+    <span class="path">/cards/riftbound/{riftbound_id}</span>
+    <span class="desc">All prints for a given riftbound id. Bare list (not paginated). The first card preview is shown.</span>
+  </header>
+  <div class="controls">
+    <label>riftbound_id <input data-q="riftbound_id" value="ogn-066" placeholder="ogn-066 (has alternate art)"></label>
+    <button>Send</button>
+  </div>
+  <div class="result"><div class="meta"></div><pre class="body"></pre><div class="card-preview" style="display:none"><img alt=""><div class="info"></div></div></div>
+</section>
+
+<section class="endpoint" data-method="GET" data-path="/index/card-names">
+  <header>
+    <span class="method">GET</span>
+    <span class="path">/index/card-names</span>
+    <span class="desc">All card names sorted alphabetically. Used by the bot for the names index.</span>
+  </header>
+  <div class="controls">
+    <button>Send</button>
+  </div>
+  <div class="result"><div class="meta"></div><pre class="body"></pre></div>
+</section>
+
+<section class="endpoint" data-method="GET" data-path="/index/domains">
+  <header>
+    <span class="method">GET</span>
+    <span class="path">/index/domains</span>
+    <span class="desc">All unique domain values across the card set.</span>
+  </header>
+  <div class="controls">
+    <button>Send</button>
+  </div>
+  <div class="result"><div class="meta"></div><pre class="body"></pre></div>
+</section>
+
+<section class="endpoint" data-method="GET" data-path="/index/types">
+  <header>
+    <span class="method">GET</span>
+    <span class="path">/index/types</span>
+    <span class="desc">All unique card-type values.</span>
+  </header>
+  <div class="controls">
+    <button>Send</button>
+  </div>
+  <div class="result"><div class="meta"></div><pre class="body"></pre></div>
+</section>
+
+<section class="endpoint" data-method="GET" data-path="/index/rarities">
+  <header>
+    <span class="method">GET</span>
+    <span class="path">/index/rarities</span>
+    <span class="desc">All unique rarity values.</span>
+  </header>
+  <div class="controls">
+    <button>Send</button>
+  </div>
+  <div class="result"><div class="meta"></div><pre class="body"></pre></div>
+</section>
+
+<script>
+  // baseUrl is read live so the user can point at a different host.
+  function getBaseUrl() {
+    return document.getElementById('baseUrl').value.replace(/\/+$/, '');
+  }
+
+  // Build a URL from a path template and the page's input values.
+  // Path templates use {param} placeholders; remaining inputs are
+  // appended as ?key=value&... query params.
+  function buildUrl(pathTpl, section) {
+    let path = pathTpl;
+    section.querySelectorAll('input[data-q]').forEach(inp => {
+      const name = inp.dataset.q;
+      const v = inp.value.trim();
+      if (!v) return;
+      const placeholder = '{' + name + '}';
+      if (path.includes(placeholder)) {
+        path = path.replace(placeholder, encodeURIComponent(v));
+      }
+    });
+    let url = getBaseUrl() + path;
+    const qp = new URLSearchParams();
+    section.querySelectorAll('input[data-q]').forEach(inp => {
+      const name = inp.dataset.q;
+      const v = inp.value.trim();
+      if (!v) return;
+      if (path.includes('{' + name + '}')) return; // already in path
+      qp.set(name, v);
+    });
+    const qs = qp.toString();
+    if (qs) url += '?' + qs;
+    return url;
+  }
+
+  function escapeHtml(s) {
+    return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  }
+
+  function showResult(section, status, ms, jsonStr, isError) {
+    const result = section.querySelector('.result');
+    const meta = result.querySelector('.meta');
+    const body = result.querySelector('.body');
+    const preview = result.querySelector('.card-preview');
+    meta.innerHTML = `<span class="status">${status}</span> · <span class="ms">${ms}ms</span> · <span>${new Date().toLocaleTimeString()}</span>`;
+    body.textContent = jsonStr;
+    result.classList.remove('ok', 'warn', 'err');
+    if (preview) preview.style.display = 'none';
+    if (isError) {
+      result.classList.add('err');
+    } else if (status >= 300 && status < 400) {
+      result.classList.add('warn');
+    } else {
+      result.classList.add('ok');
+    }
+    result.classList.add('show');
+
+    // Render a card preview if the response has media.image_url.
+    // For endpoints that return a list (e.g. /cards/riftbound/{id}),
+    // we render the first item.
+    if (preview && !isError) {
+      try {
+        const data = JSON.parse(jsonStr);
+        const card = Array.isArray(data) ? data[0] : (data.items ? data.items[0] : data);
+        if (card && card.media && card.media.image_url) {
+          preview.style.display = 'flex';
+          preview.querySelector('img').src = card.media.image_url;
+          preview.querySelector('img').alt = card.name || '';
+          const info = preview.querySelector('.info');
+          const cls = card.classification || {};
+          const set = card.set || {};
+          const attrs = card.attributes || {};
+          info.innerHTML = `
+            <h3>${escapeHtml(card.name || '')}</h3>
+            <div class="row"><strong>${escapeHtml(set.set_id || '')}-${escapeHtml(String(card.collector_number || ''))}</strong> · ${escapeHtml(cls.rarity || '')} · ${escapeHtml(cls.type || '')}${cls.supertype ? ' · ' + escapeHtml(cls.supertype) : ''}</div>
+            <div class="row">${escapeHtml((cls.domain || []).join(', '))}</div>
+            <div class="row">Energy ${attrs.energy ?? '—'} · Might ${attrs.might ?? '—'} · Power ${attrs.power ?? '—'}</div>
+            <div class="row">Artist: ${escapeHtml(card.media?.artist || '—')}</div>
+            ${card.text?.plain ? `<div class="text">${escapeHtml(card.text.plain)}</div>` : ''}
+          `;
+        }
+      } catch {}
+    }
+  }
+
+  async function send(section) {
+    const btn = section.querySelector('button');
+    const url = buildUrl(section.dataset.path, section);
+    btn.disabled = true;
+    btn.textContent = '…';
+    const t0 = performance.now();
+    try {
+      const r = await fetch(url);
+      const ms = Math.round(performance.now() - t0);
+      const text = await r.text();
+      let pretty = text;
+      try { pretty = JSON.stringify(JSON.parse(text), null, 2); } catch {}
+      showResult(section, r.status, ms, pretty, r.status >= 400);
+    } catch (e) {
+      const ms = Math.round(performance.now() - t0);
+      showResult(section, 0, ms, `Network error: ${e.message}\n\nIs the API running at ${getBaseUrl()}?`, true);
+    } finally {
+      btn.disabled = false;
+      btn.textContent = 'Send';
+    }
+  }
+
+  document.querySelectorAll('.endpoint').forEach(section => {
+    section.querySelector('button').addEventListener('click', () => send(section));
+    // Enter key in any input sends.
+    section.querySelectorAll('input').forEach(inp => {
+      inp.addEventListener('keydown', e => { if (e.key === 'Enter') send(section); });
+    });
+  });
+
+  // Auto-fetch /health on load so the user sees the page is wired up.
+  document.querySelector('.endpoint[data-path="/health"] button').click();
+</script>
+
+</body>
+</html>

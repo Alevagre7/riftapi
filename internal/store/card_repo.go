@@ -226,10 +226,12 @@ func (r *CardRepo) List(ctx context.Context, opts ListCardsOptions) ([]*CardRow,
 	return r.queryCards(ctx, opts, "")
 }
 
-// SearchText returns cards whose text.plain contains the query as
-// a substring (case-insensitive). Same filter, sort, and pagination
-// options as List. The query is matched against the stored
-// text.plain (the HTML-stripped body of the card's rules text).
+// SearchText returns cards whose name, clean_name, or text.plain
+// contains the query as a substring (case-insensitive). Same
+// filter, sort, and pagination options as List. The match runs
+// against all three fields because the bot's /card command is
+// the primary consumer and it needs name matching; the text
+// match is a bonus for users who paste rules-text fragments.
 func (r *CardRepo) SearchText(ctx context.Context, query string, opts ListCardsOptions) ([]*CardRow, int, error) {
 	return r.queryCards(ctx, opts, query)
 }
@@ -243,8 +245,16 @@ func (r *CardRepo) queryCards(ctx context.Context, opts ListCardsOptions, textQu
 		args = append(args, opts.SetID)
 	}
 	if textQuery != "" {
-		where = append(where, "json_extract(payload, '$.text.plain') LIKE ?")
-		args = append(args, "%"+textQuery+"%")
+		// Match the query against the card's display name, the
+		// punctuation-stripped clean_name (so e.g. "ahri alluring"
+		// finds "Ahri, Alluring"), or the rules-text body. All
+		// three are case-insensitive. The bot's /card command
+		// relies on the name match; the text match is for users
+		// who paste a fragment of rules text.
+		pattern := "%" + textQuery + "%"
+		where = append(where,
+			"(name LIKE ? COLLATE NOCASE OR clean_name LIKE ? COLLATE NOCASE OR json_extract(payload, '$.text.plain') LIKE ? COLLATE NOCASE)")
+		args = append(args, pattern, pattern, pattern)
 	}
 
 	whereClause := ""
