@@ -476,3 +476,43 @@ func TestTransformCard_MalformedJSON(t *testing.T) {
 		t.Errorf("expected error for malformed JSON, got nil")
 	}
 }
+
+// --- deriveRiftboundID: variant suffixes (tokens, runes) -----------------
+
+// TestTransformCard_PreservesNonNumericSuffix covers the case where
+// the upstream id has a non-numeric trailing segment (e.g. tokens
+// "unl-t01" or runes "ven-r04"). These are real card variants and
+// the trailing suffix must be preserved as part of the riftbound_id.
+// Before the fix, deriveRiftboundID stripped every trailing segment,
+// collapsing all 8 UNL tokens to "unl" and all 7 VEN runes/tokens
+// to "ven". The upsert then kept only one of each, silently
+// dropping 13 valid cards from the local store.
+func TestTransformCard_PreservesNonNumericSuffix(t *testing.T) {
+	tests := []struct {
+		name           string
+		upstreamID     string
+		wantRiftbound  string
+	}{
+		{"token unl-t01", "unl-t01", "unl-t01"},
+		{"token unl-t08", "unl-t08", "unl-t08"},
+		{"rune ven-r01", "ven-r01", "ven-r01"},
+		{"rune ven-r06", "ven-r06", "ven-r06"},
+		{"ven token t04", "ven-t04", "ven-t04"},
+		// Regression checks: numeric suffix is still stripped, and
+		// alternate-art suffix is still preserved.
+		{"base card ogn-011-298", "ogn-011-298", "ogn-011"},
+		{"alt art ogn-066a-298", "ogn-066a-298", "ogn-066a"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			json := strings.Replace(buildCardJSON(), `"id": "ogn-011-298"`, `"id": "`+tc.upstreamID+`"`, 1)
+			card, err := scrape.TransformCard([]byte(json), nil)
+			if err != nil {
+				t.Fatalf("TransformCard: %v", err)
+			}
+			if card.RiftboundID != tc.wantRiftbound {
+				t.Errorf("RiftboundID = %q, want %q (upstream id was %q)", card.RiftboundID, tc.wantRiftbound, tc.upstreamID)
+			}
+		})
+	}
+}

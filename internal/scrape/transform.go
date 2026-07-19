@@ -224,16 +224,22 @@ func TransformCard(raw []byte, setMaxs map[string]int) (*domain.Card, error) {
 }
 
 // deriveRiftboundID converts the upstream's id (e.g. "ogn-011-298")
-	// into the riftbound_id (e.g. "ogn-011"). The trailing
-// "-{setMax}" segment is stripped. For alternate arts (e.g.
-// "ogn-066a-298") the trailing letter is preserved.
+// into the riftbound_id (e.g. "ogn-011"). The trailing "-{setMax}"
+// segment is stripped, but only when the suffix is a number — the
+// upstream also uses non-numeric suffixes for variant cards (tokens
+// like "unl-t01", runes like "ven-r04") that must be preserved as
+// part of the riftbound_id. For alternate arts (e.g. "ogn-066a-298")
+// the trailing "a" survives because the setMax segment is still
+// numeric and is the one that gets stripped.
 //
 // The publicCode field is intentionally not consulted: it sometimes
 // omits the alternate-art letter suffix that the id always carries.
 // The id is the source of truth.
 func deriveRiftboundID(id string) string {
 	if i := strings.LastIndexByte(id, '-'); i > 0 {
-		return strings.ToLower(id[:i])
+		if _, err := strconv.Atoi(id[i+1:]); err == nil {
+			return strings.ToLower(id[:i])
+		}
 	}
 	return strings.ToLower(id)
 }
