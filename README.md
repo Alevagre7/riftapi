@@ -112,6 +112,18 @@ go test -race -count=1 ./internal/health/...   # alert sender
 go test -race -count=1 ./internal/api/...      # HTTP endpoints
 ```
 
+## Development
+
+A browser-based test UI is at `dev/test-page.html`. It calls the live API at `http://127.0.0.1:18080` (adjust the base URL in the page header as needed) with all bot-facing endpoints wired up.
+
+To use it:
+
+1. Start the API: `go run ./cmd/riftapi`
+2. Serve the dev directory: `python3 -m http.server 18081 -d dev`
+3. Open `http://127.0.0.1:18081/test-page.html` in a browser
+
+CORS is already open on the API, so cross-origin requests from `file://` or any origin work without extra config. The page is self-contained vanilla HTML/JS — no build step, no external dependencies.
+
 ## Documentation
 
 - [CONTEXT.md](CONTEXT.md) — domain glossary (Riftbound, Card, Set, Spoiler Season, …).
