@@ -3,7 +3,7 @@
 # Default target arch: linux/arm64 (the Pi 3B). Override with --platform=linux/amd64 for dev.
 
 # ---------- build stage ----------
-FROM golang:1.22 AS build
+FROM golang:1.25 AS build
 WORKDIR /src
 
 # Cache the module download layer
