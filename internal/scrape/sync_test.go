@@ -138,8 +138,8 @@ func TestSyncer_Run_HappyPath(t *testing.T) {
 	if state.LastStatus != "ok" {
 		t.Errorf("LastStatus = %q, want ok", state.LastStatus)
 	}
-	if state.LastCardCount != 2 {
-		t.Errorf("LastCardCount = %d, want 2", state.LastCardCount)
+	if state.LastSyncInputCount != 2 {
+		t.Errorf("LastSyncInputCount = %d, want 2", state.LastSyncInputCount)
 	}
 
 	// 5. No alerts were sent on the success path.

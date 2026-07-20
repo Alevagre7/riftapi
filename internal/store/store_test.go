@@ -541,8 +541,8 @@ func TestSyncStateRepo_InitialStateIsEmpty(t *testing.T) {
 	if got.LastStatus != "" {
 		t.Errorf("LastStatus = %q, want empty", got.LastStatus)
 	}
-	if got.LastCardCount != 0 {
-		t.Errorf("LastCardCount = %d, want 0", got.LastCardCount)
+	if got.LastSyncInputCount != 0 {
+		t.Errorf("LastSyncInputCount = %d, want 0", got.LastSyncInputCount)
 	}
 	if got.LastError != "" {
 		t.Errorf("LastError = %q, want empty", got.LastError)
@@ -563,8 +563,8 @@ func TestSyncStateRepo_MarkOK(t *testing.T) {
 	if got.LastStatus != domain.SyncStatusOK {
 		t.Errorf("LastStatus = %q, want ok", got.LastStatus)
 	}
-	if got.LastCardCount != 1178 {
-		t.Errorf("LastCardCount = %d, want 1178", got.LastCardCount)
+	if got.LastSyncInputCount != 1178 {
+		t.Errorf("LastSyncInputCount = %d, want 1178", got.LastSyncInputCount)
 	}
 	if got.LastBuildID != "build-abc" {
 		t.Errorf("LastBuildID = %q, want build-abc", got.LastBuildID)

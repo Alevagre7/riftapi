@@ -9,5 +9,5 @@ import "github.com/xalevagre7/riftapi/internal/domain"
 // will report unhealthy in that state, which is what the maintainer
 // wants.
 func IsHealthy(s *domain.SyncState) bool {
-	return s != nil && s.LastStatus == domain.SyncStatusOK && s.LastCardCount > 0
+	return s != nil && s.LastStatus == domain.SyncStatusOK && s.LastSyncInputCount > 0
 }

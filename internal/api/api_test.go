@@ -253,6 +253,7 @@ func TestCORS_HandlesPreflight(t *testing.T) {
 // --- GET /health -----------------------------------------------------------
 
 func TestHealth_200OnOK(t *testing.T) {
+	api.SyncMinCardCount = 1 // so 4 seeded cards exceed the threshold
 	st := seedStore(t)
 	if err := st.SyncState().MarkOK(context.Background(), 4, ""); err != nil {
 		t.Fatal(err)
@@ -267,12 +268,19 @@ func TestHealth_200OnOK(t *testing.T) {
 	if body["status"] != "ok" {
 		t.Errorf("body.status = %v, want ok", body["status"])
 	}
-	if body["last_card_count"].(float64) != 4 {
-		t.Errorf("body.last_card_count = %v, want 4", body["last_card_count"])
+	if body["degraded"] != false {
+		t.Errorf("body.degraded = %v, want false", body["degraded"])
+	}
+	if body["last_sync_input_count"].(float64) != 4 {
+		t.Errorf("body.last_sync_input_count = %v, want 4", body["last_sync_input_count"])
+	}
+	if body["card_count"].(float64) != 4 {
+		t.Errorf("body.card_count = %v, want 4", body["card_count"])
 	}
 }
 
 func TestHealth_503OnFailedSync(t *testing.T) {
+	api.SyncMinCardCount = 1
 	st := seedStore(t)
 	if err := st.SyncState().MarkFailed(context.Background(), errors.New("upstream 503")); err != nil {
 		t.Fatal(err)
@@ -282,26 +290,50 @@ func TestHealth_503OnFailedSync(t *testing.T) {
 	if rr.Code != http.StatusServiceUnavailable {
 		t.Errorf("status = %d, want 503", rr.Code)
 	}
-}
-
-func TestHealth_503OnNoSync(t *testing.T) {
-	// Fresh server with no sync at all.
-	srv := api.NewServer(newTestStore(t))
-	rr := do(t, srv, "/health")
-	if rr.Code != http.StatusServiceUnavailable {
-		t.Errorf("status = %d, want 503 (no sync yet)", rr.Code)
+	var body map[string]any
+	_ = json.NewDecoder(rr.Body).Decode(&body)
+	if body["status"] != "error" {
+		t.Errorf("body.status = %v, want error", body["status"])
 	}
 }
 
-func TestHealth_503WhenOKButZeroCards(t *testing.T) {
+func TestHealth_DegradedOnNoSync(t *testing.T) {
+	// Fresh server with no sync at all — should be degraded (200),
+	// not error (503), so Docker's healthcheck keeps the container up.
+	api.SyncMinCardCount = 1
+	srv := api.NewServer(newTestStore(t))
+	rr := do(t, srv, "/health")
+	if rr.Code != http.StatusOK {
+		t.Errorf("status = %d, want 200 (degraded, not error)", rr.Code)
+	}
+	var body map[string]any
+	_ = json.NewDecoder(rr.Body).Decode(&body)
+	if body["status"] != "degraded" {
+		t.Errorf("body.status = %v, want degraded", body["status"])
+	}
+	if body["degraded"] != true {
+		t.Errorf("body.degraded = %v, want true", body["degraded"])
+	}
+}
+
+func TestHealth_DegradedWhenCardCountBelowThreshold(t *testing.T) {
+	api.SyncMinCardCount = 1000 // threshold higher than the 4 seeded cards
 	st := seedStore(t)
-	if err := st.SyncState().MarkOK(context.Background(), 0, ""); err != nil {
+	if err := st.SyncState().MarkOK(context.Background(), 4, ""); err != nil {
 		t.Fatal(err)
 	}
 	srv := api.NewServer(st)
 	rr := do(t, srv, "/health")
-	if rr.Code != http.StatusServiceUnavailable {
-		t.Errorf("status = %d, want 503 (zero cards is not healthy)", rr.Code)
+	if rr.Code != http.StatusOK {
+		t.Errorf("status = %d, want 200 (degraded, not error)", rr.Code)
+	}
+	var body map[string]any
+	_ = json.NewDecoder(rr.Body).Decode(&body)
+	if body["status"] != "degraded" {
+		t.Errorf("body.status = %v, want degraded", body["status"])
+	}
+	if body["degraded"] != true {
+		t.Errorf("body.degraded = %v, want true", body["degraded"])
 	}
 }
 

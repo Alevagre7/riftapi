@@ -51,7 +51,7 @@ func (r *SyncStateRepo) Get(ctx context.Context) (*domain.SyncState, error) {
 		out.LastStatus = domain.SyncStatus(lastStatus.String)
 	}
 	if lastCount.Valid {
-		out.LastCardCount = int(lastCount.Int32)
+		out.LastSyncInputCount = int(lastCount.Int32)
 	}
 	if lastBuild.Valid {
 		out.LastBuildID = lastBuild.String
@@ -87,7 +87,7 @@ func (r *SyncStateRepo) Update(ctx context.Context, s *domain.SyncState) error {
 		lastError = sql.NullString{String: s.LastError, Valid: true}
 	}
 	res, err := r.db.ExecContext(ctx, q,
-		lastSync, string(s.LastStatus), s.LastCardCount, lastBuild, lastError,
+		lastSync, string(s.LastStatus), s.LastSyncInputCount, lastBuild, lastError,
 	)
 	if err != nil {
 		return err
@@ -103,14 +103,16 @@ func (r *SyncStateRepo) Update(ctx context.Context, s *domain.SyncState) error {
 }
 
 // MarkOK is a convenience for the common success path. It stamps
-// last_sync_at = now and writes the supplied card count + build id.
-func (r *SyncStateRepo) MarkOK(ctx context.Context, cardCount int, buildID string) error {
+// last_sync_at = now and writes the supplied input card count + build
+// id. The input count is the number of cards fed into the sync
+// (pre-dedup); it is stored as last_sync_input_count.
+func (r *SyncStateRepo) MarkOK(ctx context.Context, inputCount int, buildID string) error {
 	now := time.Now().UTC()
 	return r.Update(ctx, &domain.SyncState{
-		LastSyncAt:    &now,
-		LastStatus:    domain.SyncStatusOK,
-		LastCardCount: cardCount,
-		LastBuildID:   buildID,
+		LastSyncAt:        &now,
+		LastStatus:        domain.SyncStatusOK,
+		LastSyncInputCount: inputCount,
+		LastBuildID:       buildID,
 	})
 }
 

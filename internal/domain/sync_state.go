@@ -19,7 +19,7 @@ const (
 type SyncState struct {
 	LastSyncAt    *time.Time
 	LastStatus    SyncStatus
-	LastCardCount int
+	LastSyncInputCount int
 	LastBuildID   string
 	LastError     string
 }

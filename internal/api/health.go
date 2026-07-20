@@ -2,9 +2,14 @@ package api
 
 import (
 	"net/http"
-
-	"github.com/xalevagre7/riftapi/internal/health"
 )
+
+// SyncMinCardCount is the minimum number of cards the store must
+// contain for /health to report status "ok". If card_count is below
+// this threshold the status is "degraded" (the sync ran but may have
+// been partial). The default matches the riftapi-sync config default;
+// API tests set it lower.
+var SyncMinCardCount = 1100
 
 // root handles GET /. It returns a tiny JSON page describing the API
 // and including the Riot "Legal Jibber Jabber" attribution that
@@ -22,33 +27,73 @@ func (s *Server) root(w http.ResponseWriter, _ *http.Request) {
 	})
 }
 
-// health handles GET /health. It returns 200 with a status of "ok"
-// when the local store has a successful sync on record with at least
-// one card; 503 with a status of "unhealthy" otherwise (failed sync,
-// or no sync has run yet). The 503 is the signal that triggers a
-// docker healthcheck failure in Phase 7.
+// health handles GET /health. It returns a tri-state status:
+//
+//   - "ok" (200)       — last sync succeeded and card_count >=
+//                        SyncMinCardCount
+//   - "degraded" (200) — no sync has run yet, or the last sync
+//                        succeeded but card_count < SyncMinCardCount
+//   - "error" (503)    — last sync failed or the store is unreachable
+//
+// ok and degraded both return 200 so Docker's healthcheck keeps the
+// container up; degraded includes "degraded": true for monitoring.
 func (s *Server) health(w http.ResponseWriter, r *http.Request) {
-	state, err := s.store.SyncState().Get(r.Context())
+	// 1. Card count — if the store is unreachable this is an error.
+	cardCount, err := s.store.Cards().Count(r.Context())
 	if err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]any{
+		writeJSON(w, http.StatusServiceUnavailable, map[string]any{
 			"status": "error",
 			"error":  err.Error(),
 		})
 		return
 	}
 
-	status := "ok"
-	httpStatus := http.StatusOK
-	if !health.IsHealthy(state) {
-		status = "unhealthy"
+	// 2. Sync state.
+	state, err := s.store.SyncState().Get(r.Context())
+	if err != nil {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]any{
+			"status": "error",
+			"error":  err.Error(),
+		})
+		return
+	}
+
+	// 3. Determine the tri-state.
+	var (
+		status     string
+		httpStatus int
+		degraded   bool
+	)
+
+	switch {
+	case state.LastStatus == "ok" && cardCount >= SyncMinCardCount:
+		status = "ok"
+		httpStatus = http.StatusOK
+		degraded = false
+	case state.LastStatus == "ok":
+		// Sync succeeded but card count is below threshold.
+		status = "degraded"
+		httpStatus = http.StatusOK
+		degraded = true
+	case state.LastStatus == "":
+		// No sync has run yet — bootstrapped row with zero values.
+		status = "degraded"
+		httpStatus = http.StatusOK
+		degraded = true
+	default:
+		// LastStatus == "failed" or an unexpected value.
+		status = "error"
 		httpStatus = http.StatusServiceUnavailable
+		degraded = false
 	}
 
 	writeJSON(w, httpStatus, map[string]any{
-		"status":          status,
-		"last_sync_at":    state.LastSyncAt,
-		"last_card_count": state.LastCardCount,
-		"last_status":     string(state.LastStatus),
-		"last_error":      state.LastError,
+		"status":                status,
+		"degraded":              degraded,
+		"card_count":            cardCount,
+		"last_sync_at":          state.LastSyncAt,
+		"last_sync_input_count": state.LastSyncInputCount,
+		"last_status":           string(state.LastStatus),
+		"last_error":            state.LastError,
 	})
 }
