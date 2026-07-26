@@ -7,7 +7,7 @@ import (
 // SyncMinCardCount is the minimum number of cards the store must
 // contain for /health to report status "ok". If card_count is below
 // this threshold the status is "degraded" (the sync ran but may have
-// been partial). The default matches the riftapi-sync config default;
+	// been partial). The default matches the riftapi-scraper config default;
 // API tests set it lower.
 var SyncMinCardCount = 1100
 

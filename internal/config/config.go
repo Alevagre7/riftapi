@@ -23,17 +23,17 @@ type Config struct {
 	// Database.
 	DatabasePath string
 
-	// Scraper (riftapi-sync only).
+	// Scraper (riftapi-scraper only).
 	ScrapeUserAgent  string
 	ScrapeTimeout    time.Duration
 	ScrapeMaxRetries int
 
-	// Sync (riftapi-sync only).
+	// Sync (riftapi-scraper only).
 	SyncEnabled      bool
 	SyncMinCardCount int
 	SyncRequiredIDs  []string
 
-	// Telegram alerts (riftapi-sync only).
+	// Telegram alerts (riftapi-scraper only).
 	TelegramAlertsEnabled bool
 	TelegramBotToken      string
 	TelegramAdminChatID   string

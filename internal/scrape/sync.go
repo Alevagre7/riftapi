@@ -19,7 +19,7 @@ import (
 // WAL mode, so reads see the new data as it lands.
 //
 // The Syncer owns no goroutines and is safe to run from a single
-// caller (the riftapi-sync binary, in our case).
+	// caller (the riftapi-scraper binary, in our case).
 type Syncer struct {
 	// Store is the local SQLite store the syncer writes to. Required.
 	Store *store.Store
