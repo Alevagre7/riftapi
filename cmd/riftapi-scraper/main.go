@@ -1,11 +1,11 @@
-// riftapi-sync pulls the latest card gallery from playriftbound.com,
+// riftapi-scraper pulls the latest card gallery from playriftbound.com,
 // transforms it into the card data shape, and writes a fresh
 // SQLite snapshot. It is meant to be run by a scheduler of your
-// choice during Spoiler Season, or manually with `riftapi-sync` for
+// choice during Spoiler Season, or manually with `riftapi-scraper` for
 // ad-hoc use.
 //
 // The binary exits non-zero on any failure so the systemd unit can
-// be observed via `systemctl status riftapi-sync`. The Telegram
+// be observed via `systemctl status riftapi-scraper`. The Telegram
 // alert is sent on top of that for the maintainer.
 package main
 
@@ -37,7 +37,7 @@ func main() {
 	// belt-and-braces guard that the maintainer can flip without
 	// touching the timer.
 	if !cfg.SyncEnabled {
-		log.Println("riftapi-sync: SyncEnabled=false, exiting without changes")
+		log.Println("riftapi-scraper: SyncEnabled=false, exiting without changes")
 		os.Exit(0)
 	}
 
@@ -72,8 +72,8 @@ func main() {
 	}
 
 	if err := syn.Run(ctx); err != nil {
-		log.Printf("riftapi-sync: failed: %v", err)
+		log.Printf("riftapi-scraper: failed: %v", err)
 		os.Exit(1)
 	}
-	log.Println("riftapi-sync: done")
+	log.Println("riftapi-scraper: done")
 }

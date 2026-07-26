@@ -27,6 +27,6 @@ ENTRYPOINT ["/riftapi"]
 
 # ---------- runtime stage (sync) ----------
 FROM gcr.io/distroless/static-debian12:nonroot AS sync
-COPY --from=build /src/bin/riftapi-sync /riftapi-sync
+COPY --from=build /src/bin/riftapi-scraper /riftapi-scraper
 USER nonroot:nonroot
-ENTRYPOINT ["/riftapi-sync"]
+ENTRYPOINT ["/riftapi-scraper"]

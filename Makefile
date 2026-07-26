@@ -38,7 +38,7 @@ build-api:
 build-sync:
 	GOOS=$(GOOS) GOARCH=$(GOARCH) CGO_ENABLED=$(CGO_ENABLED) \
 		$(GO) build $(BUILD_TAGS) -ldflags '$(LDFLAGS)' \
-		-o $(BIN_DIR)/riftapi-sync ./cmd/riftapi-sync
+		-o $(BIN_DIR)/riftapi-scraper ./cmd/riftapi-scraper
 
 test:
 	$(GO) test -race -count=1 $(PKG)
@@ -63,4 +63,4 @@ run-api: build-api
 	./$(BIN_DIR)/riftapi
 
 run-sync: build-sync
-	./$(BIN_DIR)/riftapi-sync
+	./$(BIN_DIR)/riftapi-scraper
