@@ -7,8 +7,8 @@ the rest.
 
 | File | Purpose |
 |---|---|
-| `systemd/riftapi-sync.service` | One-shot service that runs the sync binary (typically invoked by the timer). |
-| `systemd/riftapi-sync.timer` | Daily schedule (03:00 by default) that triggers the service. |
+| `systemd/riftapi-scraper.service` | One-shot service that runs the sync binary (typically invoked by the timer). |
+| `systemd/riftapi-scraper.timer` | Daily schedule (03:00 by default) that triggers the service. |
 | `caddy/Caddyfile` | TLS-terminating reverse proxy in front of the API. |
 | `backup/backup.sh` | Daily online backup of the SQLite file with 7-day rolling retention. |
 
@@ -55,7 +55,7 @@ The API is long-running and is best handled by whatever your
 platform's long-running process manager is (systemd, Docker,
 Kubernetes). The sync is one-shot and runs on a schedule, which
 matches systemd timer semantics nicely. If you prefer, you can
-run the sync from cron with the same `riftapi-sync` invocation
+run the sync from cron with the same `riftapi-scraper` invocation
 that the systemd service uses — the example service file is just
 the most portable scheduler.
 

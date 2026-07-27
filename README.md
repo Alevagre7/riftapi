@@ -38,7 +38,7 @@ CORS is open by default.
 ## What's in the box
 
 - `cmd/riftapi` — the read-only HTTP API server.
-- `cmd/riftapi-sync` — the scraper; pulls `__NEXT_DATA__` from `playriftbound.com/en-us/card-gallery/`, transforms it into the card data shape, and replaces the SQLite snapshot in a single transaction.
+- `cmd/riftapi-scraper` — the scraper; pulls `__NEXT_DATA__` from `playriftbound.com/en-us/card-gallery/`, transforms it into the card data shape, and replaces the SQLite snapshot in a single transaction.
 - `internal/api` — HTTP handlers, one per endpoint. CORS middleware.
 - `internal/scrape` — upstream HTTP client (with retry/backoff), `__NEXT_DATA__` parser, gallery → card-data transformer (TDD), syncer.
 - `internal/store` — SQLite repository (WAL mode, transactional `SyncCards`).
@@ -57,7 +57,7 @@ make build
 cp riftapi.example.env .env
 $EDITOR .env
 # 4. One-shot sync against live upstream.
-RIFTAPI_DATABASE_PATH=./data/riftapi.db ./bin/riftapi-sync
+RIFTAPI_DATABASE_PATH=./data/riftapi.db ./bin/riftapi-scraper
 # 5. Run the API.
 RIFTAPI_DATABASE_PATH=./data/riftapi.db ./bin/riftapi
 # 6. Hit it.
@@ -79,7 +79,7 @@ listen on a TCP port (for the API). Some options:
   one-shot sync. The included `docker-compose.yml` is a starting
   point.
 - **Kubernetes** — the API is a stateless Deployment; the sync is
-  a CronJob that runs `riftapi-sync` against a PersistentVolume
+  a CronJob that runs `riftapi-scraper` against a PersistentVolume
   for the SQLite file.
 - **A VM, a serverless function, your laptop, anywhere** — the
   binaries don't care.
