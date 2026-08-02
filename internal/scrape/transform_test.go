@@ -174,6 +174,18 @@ func TestTransformCard_AlternateArt(t *testing.T) {
 	}
 }
 
+func TestTransformCard_DoesNotTreatMultiLetterSuffixAsAlternateArt(t *testing.T) {
+	json := strings.Replace(buildCardJSON(), `"ogn-011-298"`, `"ogn-066ab-298"`, 1)
+	json = strings.Replace(json, `"collectorNumber": 11`, `"collectorNumber": 66`, 1)
+	card, err := scrape.TransformCard([]byte(json), map[string]int{"OGN": 298})
+	if err != nil {
+		t.Fatalf("TransformCard: %v", err)
+	}
+	if card.Metadata.AlternateArt {
+		t.Fatal("AlternateArt = true, want false for a multi-letter suffix")
+	}
+}
+
 // --- metadata.overnumbered ------------------------------------------------
 
 func TestTransformCard_Overnumbered(t *testing.T) {
@@ -477,6 +489,14 @@ func TestTransformCard_MalformedJSON(t *testing.T) {
 	}
 }
 
+func TestTransformCard_InvalidStatFailsLoudly(t *testing.T) {
+	json := strings.Replace(buildCardJSON(), `"label": "3"`, `"label": "not-a-number"`, 1)
+	_, err := scrape.TransformCard([]byte(json), map[string]int{"OGN": 298})
+	if err == nil || !strings.Contains(err.Error(), "invalid attributes") {
+		t.Fatalf("TransformCard error = %v, want invalid-attributes error", err)
+	}
+}
+
 // --- deriveRiftboundID: variant suffixes (tokens, runes) -----------------
 
 // TestTransformCard_PreservesNonNumericSuffix covers the case where
@@ -489,9 +509,9 @@ func TestTransformCard_MalformedJSON(t *testing.T) {
 // dropping 13 valid cards from the local store.
 func TestTransformCard_PreservesNonNumericSuffix(t *testing.T) {
 	tests := []struct {
-		name           string
-		upstreamID     string
-		wantRiftbound  string
+		name          string
+		upstreamID    string
+		wantRiftbound string
 	}{
 		{"token unl-t01", "unl-t01", "unl-t01"},
 		{"token unl-t08", "unl-t08", "unl-t08"},

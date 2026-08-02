@@ -5,7 +5,9 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
+	"strings"
 	"time"
 )
 
@@ -59,16 +61,14 @@ func NewTelegramSenderWithBaseURL(token, chatID, baseURL string) *TelegramSender
 	return &TelegramSender{
 		token:   token,
 		chatID:  chatID,
-		baseURL: baseURL,
+		baseURL: strings.TrimRight(baseURL, "/"),
 		client:  &http.Client{Timeout: 10 * time.Second},
 	}
 }
 
 // Send posts the message to chatID via the configured bot. The
 // Telegram Bot API expects a JSON body with chat_id and text. The
-// response is checked for a 200 status; the body's `ok` field is
-// not validated (Telegram returns 200 with `ok: false` for some
-// error cases, and the maintainer can investigate from the logs).
+// response is checked for both a 200 status and Telegram's `ok` field.
 func (s *TelegramSender) Send(ctx context.Context, message string) error {
 	url := s.baseURL + "/bot" + s.token + "/sendMessage"
 	body, err := json.Marshal(map[string]string{
@@ -88,8 +88,25 @@ func (s *TelegramSender) Send(ctx context.Context, message string) error {
 		return fmt.Errorf("send: %w", err)
 	}
 	defer resp.Body.Close()
+	responseBody, readErr := io.ReadAll(io.LimitReader(resp.Body, 64<<10))
+	if readErr != nil {
+		return fmt.Errorf("read telegram response: %w", readErr)
+	}
 	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("telegram returned status %d", resp.StatusCode)
+		return fmt.Errorf("telegram returned status %d: %s", resp.StatusCode, responseSummary(responseBody))
+	}
+	var result struct {
+		OK          bool   `json:"ok"`
+		Description string `json:"description"`
+	}
+	if err := json.Unmarshal(responseBody, &result); err != nil {
+		return fmt.Errorf("decode telegram response: %w", err)
+	}
+	if !result.OK {
+		if result.Description == "" {
+			result.Description = "unknown Telegram error"
+		}
+		return fmt.Errorf("telegram rejected message: %s", result.Description)
 	}
 	return nil
 }
@@ -111,8 +128,16 @@ type SenderConfig struct {
 // required field (token, chat id) is empty, returns a NoopSender.
 // This is the only entry point the sync job needs.
 func NewSender(cfg SenderConfig) AlertSender {
-	if !cfg.Enabled || cfg.BotToken == "" || cfg.AdminChatID == "" {
+	if !cfg.Enabled || strings.TrimSpace(cfg.BotToken) == "" || strings.TrimSpace(cfg.AdminChatID) == "" {
 		return NoopSender{}
 	}
-	return NewTelegramSender(cfg.BotToken, cfg.AdminChatID)
+	return NewTelegramSender(strings.TrimSpace(cfg.BotToken), strings.TrimSpace(cfg.AdminChatID))
+}
+
+func responseSummary(body []byte) string {
+	const maxSummaryBytes = 2048
+	if len(body) > maxSummaryBytes {
+		return string(body[:maxSummaryBytes]) + "…"
+	}
+	return string(body)
 }

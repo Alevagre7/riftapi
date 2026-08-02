@@ -17,9 +17,9 @@ const (
 // SyncState is the metadata about the most recent sync run. The store
 // has a single row keyed by id=1.
 type SyncState struct {
-	LastSyncAt    *time.Time
-	LastStatus    SyncStatus
+	LastSyncAt         *time.Time
+	LastStatus         SyncStatus
 	LastSyncInputCount int
-	LastBuildID   string
-	LastError     string
+	LastBuildID        string
+	LastError          string
 }

@@ -2,13 +2,15 @@ package api
 
 import (
 	"net/http"
+
+	"github.com/xalevagre7/riftapi/internal/domain"
+	healthcheck "github.com/xalevagre7/riftapi/internal/health"
 )
 
-// SyncMinCardCount is the minimum number of cards the store must
+// SyncMinCardCount is the default minimum number of cards the store must
 // contain for /health to report status "ok". If card_count is below
 // this threshold the status is "degraded" (the sync ran but may have
-	// been partial). The default matches the riftapi-scraper config default;
-// API tests set it lower.
+// been partial). The API binary can override it per server instance.
 var SyncMinCardCount = 1100
 
 // root handles GET /. It returns a tiny JSON page describing the API
@@ -30,26 +32,17 @@ func (s *Server) root(w http.ResponseWriter, _ *http.Request) {
 // health handles GET /health. It returns a tri-state status:
 //
 //   - "ok" (200)       — last sync succeeded and card_count >=
-//                        SyncMinCardCount
+//     the configured card-count threshold
 //   - "degraded" (200) — no sync has run yet, or the last sync
-//                        succeeded but card_count < SyncMinCardCount
+//     succeeded but card_count is below the configured threshold
 //   - "error" (503)    — last sync failed or the store is unreachable
 //
 // ok and degraded both return 200 so Docker's healthcheck keeps the
 // container up; degraded includes "degraded": true for monitoring.
 func (s *Server) health(w http.ResponseWriter, r *http.Request) {
-	// 1. Card count — if the store is unreachable this is an error.
-	cardCount, err := s.store.Cards().Count(r.Context())
-	if err != nil {
-		writeJSON(w, http.StatusServiceUnavailable, map[string]any{
-			"status": "error",
-			"error":  err.Error(),
-		})
-		return
-	}
-
-	// 2. Sync state.
-	state, err := s.store.SyncState().Get(r.Context())
+	// Read both values from one transaction so a snapshot commit cannot
+	// produce a mixed card count and sync state in the same response.
+	cardCount, state, err := s.store.HealthSnapshot(r.Context())
 	if err != nil {
 		writeJSON(w, http.StatusServiceUnavailable, map[string]any{
 			"status": "error",
@@ -66,11 +59,11 @@ func (s *Server) health(w http.ResponseWriter, r *http.Request) {
 	)
 
 	switch {
-	case state.LastStatus == "ok" && cardCount >= SyncMinCardCount:
+	case healthcheck.IsHealthy(state, cardCount, s.syncMinCardCount):
 		status = "ok"
 		httpStatus = http.StatusOK
 		degraded = false
-	case state.LastStatus == "ok":
+	case state.LastStatus == domain.SyncStatusOK:
 		// Sync succeeded but card count is below threshold.
 		status = "degraded"
 		httpStatus = http.StatusOK

@@ -7,7 +7,8 @@ the rest.
 
 | File | Purpose |
 |---|---|
-| `systemd/riftapi-scraper.service` | One-shot service that runs the sync binary (typically invoked by the timer). |
+| `systemd/riftapi.service` | Long-running API service (one option for host deployments). |
+| `systemd/riftapi-scraper.service` | One-shot service that runs the scraper binary (typically invoked by the timer). |
 | `systemd/riftapi-scraper.timer` | Daily schedule (03:00 by default) that triggers the service. |
 | `caddy/Caddyfile` | TLS-terminating reverse proxy in front of the API. |
 | `backup/backup.sh` | Daily online backup of the SQLite file with 7-day rolling retention. |
@@ -17,14 +18,14 @@ the rest.
 - **If you run the API on a single Linux host** — copy the systemd
   units to `/etc/systemd/system/`, put `backup.sh` in cron, run
   Caddy (or nginx, or your preferred reverse proxy) on the host.
-  The two systemd units together give you a nightly sync without
-  the rest of the rig.
-- **If you run the API in Docker** — `docker compose up -d api`
-  is the long-running process; the sync is a one-shot container
-  you trigger from any scheduler (cron on the host, a
-  Kubernetes CronJob, a GitHub Actions schedule, etc.). The
-  systemd files and the Caddyfile are still useful as a model;
-  the `backup.sh` script works against any path you can reach.
+  The API service plus scraper service/timer give you a long-lived
+  API and nightly sync without the rest of the rig.
+- **If you run the API in Docker** — build the `api` target from the
+  root Dockerfile and run it with a writable `/data` mount. Build the
+  `sync` target for a one-shot scraper container and trigger it from
+  cron, a Kubernetes CronJob, or another scheduler. The systemd files
+  and Caddyfile are still useful as a model; `backup.sh` works against
+  any path you can reach.
 - **If you run the API in Kubernetes** — the API is a stateless
   Deployment; the sync is a CronJob. The `backup.sh` script can
   run from a CronJob too, with a `hostPath` or PVC for the
@@ -49,22 +50,18 @@ before deploying:
 | `/var/backups/riftapi/` | A directory you create, writable by the backup cron job. |
 | `sqlite3` | The path to your `sqlite3` binary. |
 
-## Why systemd for the sync, not the API?
+## Why separate API and scraper units?
 
-The API is long-running and is best handled by whatever your
-platform's long-running process manager is (systemd, Docker,
-Kubernetes). The sync is one-shot and runs on a schedule, which
-matches systemd timer semantics nicely. If you prefer, you can
-run the sync from cron with the same `riftapi-scraper` invocation
-that the systemd service uses — the example service file is just
-the most portable scheduler.
+The API is long-running, while the scraper is one-shot and runs on
+a schedule. Keeping them as separate units means the API can be
+restarted independently and the scraper can be disabled outside
+Spoiler Season. If you use Docker or Kubernetes, use the same
+separation as an API service and a scheduled scraper job.
 
 ## Health checks
 
-The `docker-compose.yml` at the repo root has a Docker healthcheck
-that calls `riftapi --healthcheck`, which probes the local
-`/health` endpoint and exits 0/1 accordingly. The same approach
-works in any other environment: have your supervisor (Docker,
-Kubernetes, systemd) periodically run `riftapi --healthcheck` (or
-`curl --fail http://localhost:8080/health`) and restart on
-failure.
+The API image can be checked with `riftapi --healthcheck`, which
+probes the local `/health` endpoint and exits 0/1 accordingly. The
+same approach works in any other environment: have your supervisor
+(Docker, Kubernetes, systemd) periodically run that command (or
+`curl --fail http://localhost:8080/health`) and restart on failure.

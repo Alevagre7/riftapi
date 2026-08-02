@@ -36,25 +36,12 @@ func (s *Server) listCardsByName(w http.ResponseWriter, r *http.Request) {
 
 	var rows []*store.CardRow
 	if exact := strings.TrimSpace(r.URL.Query().Get("exact")); exact != "" {
-		row, err := repo.GetByName(ctx, exact)
+		var err error
+		rows, err = repo.SearchByExactName(ctx, exact)
 		if err != nil {
-			if errors.Is(err, sql.ErrNoRows) {
-				// Exact lookup with no match: return an empty
-				// search response (the upstream API returns
-				// total=0 in this case).
-				writeJSON(w, http.StatusOK, map[string]any{
-					"items": []json.RawMessage{},
-					"total": 0,
-					"page":  1,
-					"size":  0,
-					"pages": 0,
-				})
-				return
-			}
 			writeError(w, http.StatusInternalServerError, err.Error())
 			return
 		}
-		rows = []*store.CardRow{row}
 	} else if fuzzy := strings.TrimSpace(r.URL.Query().Get("fuzzy")); fuzzy != "" {
 		var err error
 		rows, err = repo.SearchByName(ctx, fuzzy, 0)
@@ -64,6 +51,16 @@ func (s *Server) listCardsByName(w http.ResponseWriter, r *http.Request) {
 		}
 	} else {
 		writeError(w, http.StatusBadRequest, "either fuzzy or exact query parameter is required")
+		return
+	}
+	if len(rows) == 0 {
+		writeJSON(w, http.StatusOK, map[string]any{
+			"items": []json.RawMessage{},
+			"total": 0,
+			"page":  1,
+			"size":  0,
+			"pages": 0,
+		})
 		return
 	}
 

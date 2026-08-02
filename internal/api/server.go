@@ -5,12 +5,12 @@
 // The package is laid out by endpoint family:
 //
 //   - server.go     — Server type, NewServer, Routes. Owns the
-//                     dependency on the store.
+//     dependency on the store.
 //   - middleware.go — CORS middleware.
 //   - helpers.go    — writeJSON / writeError response helpers.
 //   - health.go     — GET /, GET /health.
 //   - cards.go      — GET /cards/* handlers (name, riftbound, by id,
-//                     list, search).
+//     list, search).
 //   - index.go      — GET /index/* handlers (card-names and friends).
 //
 // Handlers are thin: they read from the store, pass the stored JSON
@@ -28,14 +28,26 @@ import (
 // Server is the API's HTTP surface. One Server per process; it holds
 // the store and the wired routes. There is no global state.
 type Server struct {
-	store *store.Store
+	store            *store.Store
+	syncMinCardCount int
 }
 
 // NewServer returns a Server backed by s. The store must already be
 // Open()ed; the Server does not own its lifecycle (the binary
 // entry-point closes it on shutdown).
 func NewServer(s *store.Store) *Server {
-	return &Server{store: s}
+	return NewServerWithMinCardCount(s, SyncMinCardCount)
+}
+
+// NewServerWithMinCardCount wires the health threshold into the server
+// instance. Keeping it on the server means a running API does not read a
+// mutable package global, and the API can use the same threshold as the
+// scraper configuration.
+func NewServerWithMinCardCount(s *store.Store, minCardCount int) *Server {
+	if minCardCount < 0 {
+		minCardCount = 0
+	}
+	return &Server{store: s, syncMinCardCount: minCardCount}
 }
 
 // Routes returns the http.Handler for the API. Use it as the

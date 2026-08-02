@@ -17,7 +17,7 @@ The JSON shape is the natural shape of the data on `playriftbound.com/en-us/card
 | Method | Path | Returns |
 |---|---|---|
 | GET | `/` | API info, Legal Jibber Jabber attribution. |
-| GET | `/health` | 200 if the last sync succeeded, 503 otherwise. |
+| GET | `/health` | 200 when the store is reachable (healthy or degraded), 503 after a failed sync or store error. |
 | GET | `/cards` | Paginated, sortable (`name`, `collector_number`, `set_id`), filterable by `set_id`. |
 | GET | `/cards/{id}` | Lookup by `riftbound_id` (e.g. `ogn-011`). |
 | GET | `/cards/name?fuzzy=X` / `?exact=X` | Name search. |
@@ -41,8 +41,8 @@ CORS is open by default.
 - `cmd/riftapi-scraper` — the scraper; pulls `__NEXT_DATA__` from `playriftbound.com/en-us/card-gallery/`, transforms it into the card data shape, and replaces the SQLite snapshot in a single transaction.
 - `internal/api` — HTTP handlers, one per endpoint. CORS middleware.
 - `internal/scrape` — upstream HTTP client (with retry/backoff), `__NEXT_DATA__` parser, gallery → card-data transformer (TDD), syncer.
-- `internal/store` — SQLite repository (WAL mode, transactional `SyncCards`).
-- `internal/health` — sync state, `/health` endpoint, Telegram alert sender.
+- `internal/store` — SQLite repository (WAL mode, transactional `SyncSnapshot`).
+- `internal/health` — shared sync-health predicate and Telegram alert sender.
 - `internal/domain` — Card, Set, Index types.
 - `internal/config` — env-var loader.
 - `deploy/` — example ops files: systemd units, a Caddyfile, a backup script. **These are starting points**, not the only way to deploy. See [deploy/README.md](deploy/README.md).
@@ -50,17 +50,22 @@ CORS is open by default.
 ## Quick start (local dev)
 
 ```bash
-# 1. Install Go 1.22+ if you don't have it.
+# 1. Install Go 1.25+ if you don't have it.
 # 2. Build both binaries.
 make build
 # 3. Configure. Copy the example and edit.
 cp riftapi.example.env .env
 $EDITOR .env
-# 4. One-shot sync against live upstream.
+# 4. Load the env file in this shell. The binaries read environment variables;
+#    they do not implicitly parse .env files.
+set -a; . ./.env; set +a
+# 5. Create the local data directory (the store also creates missing parents).
+mkdir -p data
+# 6. One-shot sync against live upstream.
 RIFTAPI_DATABASE_PATH=./data/riftapi.db ./bin/riftapi-scraper
-# 5. Run the API.
+# 7. Run the API.
 RIFTAPI_DATABASE_PATH=./data/riftapi.db ./bin/riftapi
-# 6. Hit it.
+# 8. Hit it.
 curl localhost:8080/cards/riftbound/ogn-011 | jq .
 curl localhost:8080/health | jq .
 ```
@@ -74,10 +79,11 @@ listen on a TCP port (for the API). Some options:
 - **Direct on a host** — run the two binaries under your init
   system of choice (systemd, runit, s6, launchd, …). The example
   units in `deploy/systemd/` are one such configuration.
-- **Docker / docker compose** — `docker compose up api` for the
-  long-running service, `docker compose run --rm sync` for a
-  one-shot sync. The included `docker-compose.yml` is a starting
-  point.
+- **Docker** — build the long-running API image with
+  `docker build --target api -t riftapi:latest .`, or build the
+  one-shot scraper with `--target sync`. A named volume is writable by
+  the image's non-root user; for a bind mount, make the host directory
+  writable by UID 65532. Pass the environment from `riftapi.example.env`.
 - **Kubernetes** — the API is a stateless Deployment; the sync is
   a CronJob that runs `riftapi-scraper` against a PersistentVolume
   for the SQLite file.
@@ -96,7 +102,7 @@ defaults. The key ones:
 
 | Variable | Purpose |
 |---|---|
-| `RIFTAPI_DATABASE_PATH` | Path to the SQLite file. Defaults to `/data/riftapi.db` (the in-container path in `docker-compose.yml`). |
+| `RIFTAPI_DATABASE_PATH` | Path to the SQLite file. Defaults to `/data/riftapi.db` in the container image. |
 | `RIFTAPI_API_BIND` / `RIFTAPI_API_PORT` | Where the API listens. Defaults to `0.0.0.0:8080`. |
 | `RIFTAPI_SYNC_ENABLED` | Master switch for the sync. Default off. Flip to `true` for the duration of a Spoiler Season. |
 | `RIFTAPI_SCRAPE_USER_AGENT` | User-Agent header for the upstream HTTP request. Include contact info per upstream norms. |
@@ -105,7 +111,7 @@ defaults. The key ones:
 ## Tests
 
 ```bash
-make test                              # full suite, all 4 packages
+make test                              # full suite
 go test -race -count=1 ./internal/store/...    # data layer
 go test -race -count=1 ./internal/scrape/...   # scraper + transformer (TDD)
 go test -race -count=1 ./internal/health/...   # alert sender
@@ -135,4 +141,6 @@ CORS is already open on the API, so cross-origin requests from `file://` or any 
 
 ## Status
 
-All seven phases of [the implementation plan](docs/IMPLEMENTATION_PLAN.md) are complete. The MVP, the full API surface, and the operational docs are in. The API is ready to serve; point your HTTP client at it.
+The core scraper, transactional store, full API surface, and operational
+baseline are implemented. Optional follow-ups from the historical
+[implementation plan](docs/IMPLEMENTATION_PLAN.md) remain outside the MVP.

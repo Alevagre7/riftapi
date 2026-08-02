@@ -90,9 +90,9 @@ func buildCardRow(t *testing.T, c sampleCard) store.CardRow {
 			Energy: c.energy,
 		},
 		Classification: domain.Classification{
-			Type:      c.cardType,
-			Rarity:    c.rarity,
-			Domain:    c.domain,
+			Type:   c.cardType,
+			Rarity: c.rarity,
+			Domain: c.domain,
 		},
 		Text: domain.Text{Rich: "rules", Plain: "rules"},
 		Set:  domain.CardSet{SetID: c.setID, Label: c.setID},
@@ -395,6 +395,29 @@ func TestCardsName(t *testing.T) {
 	}
 }
 
+func TestCardsName_ExactIncludesVariantsWithSameName(t *testing.T) {
+	st := seedStore(t)
+	variant := sampleCards[0]
+	variant.riftboundID = "ogn-011a"
+	if err := st.Cards().Upsert(context.Background(), buildCardRow(t, variant)); err != nil {
+		t.Fatalf("Upsert variant: %v", err)
+	}
+	rr := do(t, api.NewServer(st), "/cards/name?exact=Abandon")
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (body=%s)", rr.Code, rr.Body.String())
+	}
+	var body struct {
+		Items []json.RawMessage `json:"items"`
+		Total int               `json:"total"`
+	}
+	if err := json.NewDecoder(rr.Body).Decode(&body); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if body.Total != 2 || len(body.Items) != 2 {
+		t.Fatalf("exact result = total %d, items %d; want two variants", body.Total, len(body.Items))
+	}
+}
+
 // --- GET /cards/{id} -------------------------------------------------------
 
 func TestCardByID(t *testing.T) {
@@ -563,10 +586,10 @@ func TestCardsList(t *testing.T) {
 	}
 	var body struct {
 		Items []map[string]any `json:"items"`
-		Total int               `json:"total"`
-		Page  int               `json:"page"`
-		Size  int               `json:"size"`
-		Pages int               `json:"pages"`
+		Total int              `json:"total"`
+		Page  int              `json:"page"`
+		Size  int              `json:"size"`
+		Pages int              `json:"pages"`
 	}
 	if err := json.NewDecoder(rr.Body).Decode(&body); err != nil {
 		t.Fatalf("decode: %v", err)
@@ -645,8 +668,8 @@ func TestCardsList_Pagination(t *testing.T) {
 	}
 	var body struct {
 		Items []map[string]any `json:"items"`
-		Total int               `json:"total"`
-		Pages int               `json:"pages"`
+		Total int              `json:"total"`
+		Pages int              `json:"pages"`
 	}
 	if err := json.NewDecoder(rr.Body).Decode(&body); err != nil {
 		t.Fatalf("decode: %v", err)
@@ -672,7 +695,7 @@ func TestCardsSearch(t *testing.T) {
 	}
 	var body struct {
 		Items []map[string]any `json:"items"`
-		Total int               `json:"total"`
+		Total int              `json:"total"`
 	}
 	if err := json.NewDecoder(rr.Body).Decode(&body); err != nil {
 		t.Fatalf("decode: %v", err)
@@ -824,10 +847,10 @@ func TestSetsList(t *testing.T) {
 	}
 	var body struct {
 		Items []map[string]any `json:"items"`
-		Total int               `json:"total"`
-		Page  int               `json:"page"`
-		Size  int               `json:"size"`
-		Pages int               `json:"pages"`
+		Total int              `json:"total"`
+		Page  int              `json:"page"`
+		Size  int              `json:"size"`
+		Pages int              `json:"pages"`
 	}
 	if err := json.NewDecoder(rr.Body).Decode(&body); err != nil {
 		t.Fatalf("decode: %v", err)
@@ -858,8 +881,8 @@ func TestSetsList_Pagination(t *testing.T) {
 	}
 	var body struct {
 		Items []map[string]any `json:"items"`
-		Total int               `json:"total"`
-		Pages int               `json:"pages"`
+		Total int              `json:"total"`
+		Pages int              `json:"pages"`
 	}
 	if err := json.NewDecoder(rr.Body).Decode(&body); err != nil {
 		t.Fatalf("decode: %v", err)
@@ -882,9 +905,9 @@ func TestSetsList_Empty(t *testing.T) {
 		t.Fatalf("status = %d, want 200", rr.Code)
 	}
 	var body struct {
-		Total  int             `json:"total"`
-		Items  []map[string]any `json:"items"`
-		Pages  int             `json:"pages"`
+		Total int              `json:"total"`
+		Items []map[string]any `json:"items"`
+		Pages int              `json:"pages"`
 	}
 	if err := json.NewDecoder(rr.Body).Decode(&body); err != nil {
 		t.Fatalf("decode: %v", err)

@@ -4,6 +4,11 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"os"
+	"path/filepath"
+	"strings"
+
+	"github.com/xalevagre7/riftapi/internal/domain"
 
 	// Pure-Go SQLite driver. No CGO, ARM cross-compile works without
 	// a cross toolchain, which matters for the linux/arm64 Pi target.
@@ -23,6 +28,12 @@ type Store struct {
 // runs all pending migrations. The returned Store is safe for
 // concurrent use.
 func Open(ctx context.Context, path string) (*Store, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	if err := ensureParentDir(path); err != nil {
+		return nil, err
+	}
 	db, err := sql.Open("sqlite", path)
 	if err != nil {
 		return nil, fmt.Errorf("sql.Open: %w", err)
@@ -60,6 +71,20 @@ func Open(ctx context.Context, path string) (*Store, error) {
 	return &Store{db: db, path: path}, nil
 }
 
+func ensureParentDir(path string) error {
+	if path == "" || path == ":memory:" || strings.HasPrefix(path, "file:") {
+		return nil
+	}
+	dir := filepath.Dir(path)
+	if dir == "." || dir == "" {
+		return nil
+	}
+	if err := os.MkdirAll(dir, 0o750); err != nil {
+		return fmt.Errorf("create database directory %q: %w", dir, err)
+	}
+	return nil
+}
+
 // Close releases the underlying database connection. Idempotent.
 func (s *Store) Close() error {
 	if s == nil || s.db == nil {
@@ -95,3 +120,30 @@ func (s *Store) Sets() *SetRepo { return NewSetRepo(s.db) }
 
 // SyncState returns a SyncStateRepo bound to this store's database.
 func (s *Store) SyncState() *SyncStateRepo { return NewSyncStateRepo(s.db) }
+
+// HealthSnapshot reads the card count and sync state from one SQLite read
+// transaction. This prevents /health from combining the old card count with
+// the new sync state (or vice versa) while a scraper commits a snapshot.
+func (s *Store) HealthSnapshot(ctx context.Context) (int, *domain.SyncState, error) {
+	if s == nil || s.db == nil {
+		return 0, nil, fmt.Errorf("store is not open")
+	}
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return 0, nil, fmt.Errorf("begin health read tx: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	var cardCount int
+	if err := tx.QueryRowContext(ctx, `SELECT COUNT(1) FROM cards`).Scan(&cardCount); err != nil {
+		return 0, nil, err
+	}
+	state, err := getSyncState(ctx, tx)
+	if err != nil {
+		return 0, nil, err
+	}
+	if err := tx.Commit(); err != nil {
+		return 0, nil, fmt.Errorf("commit health read tx: %w", err)
+	}
+	return cardCount, state, nil
+}

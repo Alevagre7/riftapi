@@ -1,7 +1,6 @@
 // Package config loads riftapi's runtime configuration from environment
-// variables. A config-file loader (YAML) is layered on top in Phase 7
-// (see docs/IMPLEMENTATION_PLAN.md), but env-only is sufficient for the
-// first five phases.
+// variables. The deployment examples use environment files so the API and
+// scraper share one documented configuration surface.
 package config
 
 import (
@@ -42,24 +41,58 @@ type Config struct {
 	LogLevel string
 }
 
-// Load reads the environment and returns a fully-populated Config.
-// Invalid values fall back to defaults; only structural problems
-// (unparseable integers, etc.) are returned as errors.
+// Load reads the environment and returns a fully-populated Config. Explicitly
+// malformed values are errors instead of silently turning into defaults; a
+// typo in a port or retry count should stop startup loudly.
 func Load() (*Config, error) {
+	apiPort, err := getEnvInt("RIFTAPI_API_PORT", 8080)
+	if err != nil {
+		return nil, err
+	}
+	timeoutSecs, err := getEnvInt("RIFTAPI_SCRAPE_TIMEOUT_SECS", 30)
+	if err != nil {
+		return nil, err
+	}
+	const maxTimeoutSecs = int64(1<<63-1) / int64(time.Second)
+	if int64(timeoutSecs) > maxTimeoutSecs {
+		return nil, fmt.Errorf("RIFTAPI_SCRAPE_TIMEOUT_SECS is too large: %d", timeoutSecs)
+	}
+	maxRetries, err := getEnvInt("RIFTAPI_SCRAPE_MAX_RETRIES", 2)
+	if err != nil {
+		return nil, err
+	}
+	minCardCount, err := getEnvInt("RIFTAPI_SYNC_MIN_CARD_COUNT", 1100)
+	if err != nil {
+		return nil, err
+	}
+	syncEnabled, err := getEnvBool("RIFTAPI_SYNC_ENABLED", false)
+	if err != nil {
+		return nil, err
+	}
+	alertsEnabled, err := getEnvBool("RIFTAPI_TELEGRAM_ALERTS_ENABLED", true)
+	if err != nil {
+		return nil, err
+	}
+	requiredIDs := getEnvDefault("RIFTAPI_SYNC_REQUIRED_IDS", "ogn-011,unl-001,sfd-001,ven-001")
+	if _, ok := os.LookupEnv("RIFTAPI_SYNC_REQUIRED_IDS"); ok {
+		// Unlike most string settings, an explicitly empty required-ID list
+		// is meaningful: it disables that optional sanity check.
+		requiredIDs = os.Getenv("RIFTAPI_SYNC_REQUIRED_IDS")
+	}
 	cfg := &Config{
-		APIBind:               getEnvDefault("RIFTAPI_API_BIND", "0.0.0.0"),
-		APIPort:               getEnvInt("RIFTAPI_API_PORT", 8080),
-		DatabasePath:          getEnvDefault("RIFTAPI_DATABASE_PATH", "/data/riftapi.db"),
-		ScrapeUserAgent:       getEnvDefault("RIFTAPI_SCRAPE_USER_AGENT", "riftapi/0.1 (+https://github.com/xalevagre7/riftapi)"),
-		ScrapeTimeout:         time.Duration(getEnvInt("RIFTAPI_SCRAPE_TIMEOUT_SECS", 30)) * time.Second,
-		ScrapeMaxRetries:      getEnvInt("RIFTAPI_SCRAPE_MAX_RETRIES", 2),
-		SyncEnabled:           getEnvBool("RIFTAPI_SYNC_ENABLED", false),
-		SyncMinCardCount:      getEnvInt("RIFTAPI_SYNC_MIN_CARD_COUNT", 1100),
-		SyncRequiredIDs:       splitCSV(getEnvDefault("RIFTAPI_SYNC_REQUIRED_IDS", "ogn-011,unl-001,sfd-001,ven-001")),
-		TelegramAlertsEnabled: getEnvBool("RIFTAPI_TELEGRAM_ALERTS_ENABLED", true),
+		APIBind:               strings.TrimSpace(getEnvDefault("RIFTAPI_API_BIND", "0.0.0.0")),
+		APIPort:               apiPort,
+		DatabasePath:          strings.TrimSpace(getEnvDefault("RIFTAPI_DATABASE_PATH", "/data/riftapi.db")),
+		ScrapeUserAgent:       strings.TrimSpace(getEnvDefault("RIFTAPI_SCRAPE_USER_AGENT", "riftapi/0.1 (+https://github.com/xalevagre7/riftapi)")),
+		ScrapeTimeout:         time.Duration(timeoutSecs) * time.Second,
+		ScrapeMaxRetries:      maxRetries,
+		SyncEnabled:           syncEnabled,
+		SyncMinCardCount:      minCardCount,
+		SyncRequiredIDs:       splitCSV(requiredIDs),
+		TelegramAlertsEnabled: alertsEnabled,
 		TelegramBotToken:      getEnvDefault("RIFTAPI_TELEGRAM_BOT_TOKEN", ""),
 		TelegramAdminChatID:   getEnvDefault("RIFTAPI_TELEGRAM_ADMIN_CHAT_ID", ""),
-		LogLevel:              getEnvDefault("RIFTAPI_LOG_LEVEL", "info"),
+		LogLevel:              strings.ToLower(strings.TrimSpace(getEnvDefault("RIFTAPI_LOG_LEVEL", "info"))),
 	}
 	return cfg, nil
 }
@@ -68,17 +101,34 @@ func Load() (*Config, error) {
 // values, out-of-range ports). Soft problems (unset Telegram token when
 // alerts are enabled) are logged at startup time by the caller, not here.
 func (c *Config) Validate() error {
+	if c == nil {
+		return fmt.Errorf("config is nil")
+	}
 	if c.APIPort <= 0 || c.APIPort > 65535 {
 		return fmt.Errorf("invalid API port: %d", c.APIPort)
 	}
-	if c.DatabasePath == "" {
+	if strings.TrimSpace(c.DatabasePath) == "" {
 		return fmt.Errorf("database path is required (set RIFTAPI_DATABASE_PATH)")
+	}
+	if strings.TrimSpace(c.APIBind) == "" {
+		return fmt.Errorf("API bind address cannot be empty")
+	}
+	if strings.TrimSpace(c.ScrapeUserAgent) == "" {
+		return fmt.Errorf("scrape user-agent cannot be empty")
 	}
 	if c.ScrapeTimeout <= 0 {
 		return fmt.Errorf("invalid scrape timeout: %s", c.ScrapeTimeout)
 	}
+	if c.ScrapeMaxRetries < 0 || c.ScrapeMaxRetries > 10 {
+		return fmt.Errorf("invalid scrape max retries: %d (want 0-10)", c.ScrapeMaxRetries)
+	}
 	if c.SyncMinCardCount < 0 {
 		return fmt.Errorf("invalid sync min card count: %d", c.SyncMinCardCount)
+	}
+	switch strings.ToLower(strings.TrimSpace(c.LogLevel)) {
+	case "debug", "info", "warn", "error":
+	default:
+		return fmt.Errorf("invalid log level: %q", c.LogLevel)
 	}
 	return nil
 }
@@ -90,22 +140,28 @@ func getEnvDefault(key, def string) string {
 	return def
 }
 
-func getEnvInt(key string, def int) int {
-	if v := os.Getenv(key); v != "" {
-		if n, err := strconv.Atoi(v); err == nil {
-			return n
-		}
+func getEnvInt(key string, def int) (int, error) {
+	v, ok := os.LookupEnv(key)
+	if !ok || strings.TrimSpace(v) == "" {
+		return def, nil
 	}
-	return def
+	n, err := strconv.Atoi(strings.TrimSpace(v))
+	if err != nil {
+		return 0, fmt.Errorf("%s must be an integer, got %q: %w", key, v, err)
+	}
+	return n, nil
 }
 
-func getEnvBool(key string, def bool) bool {
-	if v := os.Getenv(key); v != "" {
-		if b, err := strconv.ParseBool(v); err == nil {
-			return b
-		}
+func getEnvBool(key string, def bool) (bool, error) {
+	v, ok := os.LookupEnv(key)
+	if !ok || strings.TrimSpace(v) == "" {
+		return def, nil
 	}
-	return def
+	b, err := strconv.ParseBool(strings.TrimSpace(v))
+	if err != nil {
+		return false, fmt.Errorf("%s must be a boolean, got %q: %w", key, v, err)
+	}
+	return b, nil
 }
 
 func splitCSV(s string) []string {

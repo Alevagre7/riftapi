@@ -1,0 +1,11 @@
+[Unit]
+Description=Schedule the riftapi card-data scraper
+
+[Timer]
+OnCalendar=*-*-* 03:00:00
+Persistent=true
+AccuracySec=1m
+Unit=riftapi-scraper.service
+
+[Install]
+WantedBy=timers.target

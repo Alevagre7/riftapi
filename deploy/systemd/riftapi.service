@@ -1,0 +1,24 @@
+[Unit]
+Description=riftapi read-only card API
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/riftapi
+ExecStart=/opt/riftapi/bin/riftapi
+EnvironmentFile=/etc/riftapi/riftapi.env
+
+Restart=on-failure
+RestartSec=5s
+TimeoutStopSec=10s
+StandardOutput=journal
+StandardError=journal
+
+User=riftapi
+Group=riftapi
+NoNewPrivileges=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

@@ -1,7 +1,7 @@
 # Caddyfile for riftapi
 #
 # This is the TLS-terminating reverse proxy in front of the riftapi
-# container. Replace `riftapi.lan` with the actual hostname (or
+# service. Replace `riftapi.lan` with the actual hostname (or
 # public domain, if you expose the API beyond your LAN) you want to
 # serve the API on.
 #
@@ -10,8 +10,9 @@
 # remove the auto-HTTPS block.
 
 riftapi.lan {
-    # The riftapi container listens on 8080 inside Docker; Caddy
-    # runs on the host, so localhost is the right address.
+    # The riftapi service listens on 8080 on the host (or publish the
+    # container's port there); Caddy runs on the host, so localhost is
+    # the right address.
     reverse_proxy localhost:8080
 
     # Pass the original Host header so the API sees the public

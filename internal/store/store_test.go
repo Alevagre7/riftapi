@@ -378,6 +378,25 @@ func TestCardRepo_ListNames_Sorted(t *testing.T) {
 	}
 }
 
+func TestCardRepo_ListNames_IsDistinct(t *testing.T) {
+	s := newTestStore(t)
+	repo := s.Cards()
+	ctx := context.Background()
+	for i, id := range []string{"ogn-001", "ogn-001a"} {
+		row, _ := sampleCard(t, id, "Abandon", "OGN", i+1)
+		if err := repo.Upsert(ctx, row); err != nil {
+			t.Fatalf("Upsert %s: %v", id, err)
+		}
+	}
+	names, err := repo.ListNames(ctx)
+	if err != nil {
+		t.Fatalf("ListNames: %v", err)
+	}
+	if !slices.Equal(names, []string{"Abandon"}) {
+		t.Fatalf("ListNames = %v, want one distinct name", names)
+	}
+}
+
 func TestCardRepo_Count(t *testing.T) {
 	s := newTestStore(t)
 	repo := store.NewCardRepo(s.DB())
@@ -489,6 +508,79 @@ func TestCardRepo_SyncCards_EmptyClearsStore(t *testing.T) {
 	}
 	if n, _ := repo.Count(ctx); n != 0 {
 		t.Errorf("Count = %d, want 0 after SyncCards(nil)", n)
+	}
+}
+
+func TestStore_SyncSnapshot_ReplacesAllTablesTogether(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+	oldCard, _ := sampleCard(t, "ogn-001", "Old", "OGN", 1)
+	oldSet, _ := sampleSet(t, "OGN", 1)
+	if err := s.Cards().Upsert(ctx, oldCard); err != nil {
+		t.Fatalf("seed card: %v", err)
+	}
+	if err := s.Sets().Upsert(ctx, oldSet); err != nil {
+		t.Fatalf("seed set: %v", err)
+	}
+	if err := s.SyncState().MarkOK(ctx, 1, "old-build"); err != nil {
+		t.Fatalf("seed state: %v", err)
+	}
+
+	newCard, _ := sampleCard(t, "unl-001", "New", "UNL", 1)
+	newSet, _ := sampleSet(t, "UNL", 1)
+	if err := s.SyncSnapshot(ctx, []store.CardRow{newCard}, []store.SetRow{newSet}, 1, "new-build"); err != nil {
+		t.Fatalf("SyncSnapshot: %v", err)
+	}
+	if _, err := s.Cards().GetByRiftboundID(ctx, "ogn-001"); !errors.Is(err, sql.ErrNoRows) {
+		t.Fatalf("old card lookup error = %v, want ErrNoRows", err)
+	}
+	if _, err := s.Sets().GetByID(ctx, "OGN"); !errors.Is(err, sql.ErrNoRows) {
+		t.Fatalf("old set lookup error = %v, want ErrNoRows", err)
+	}
+	if _, err := s.Cards().GetByRiftboundID(ctx, "unl-001"); err != nil {
+		t.Fatalf("new card lookup: %v", err)
+	}
+	state, err := s.SyncState().Get(ctx)
+	if err != nil {
+		t.Fatalf("get state: %v", err)
+	}
+	if state.LastStatus != domain.SyncStatusOK || state.LastBuildID != "new-build" {
+		t.Fatalf("state = %+v, want successful new snapshot", state)
+	}
+}
+
+func TestStore_SyncSnapshot_RollsBackCardsWhenSetWriteFails(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+	oldCard, _ := sampleCard(t, "ogn-001", "Old", "OGN", 1)
+	oldSet, _ := sampleSet(t, "OGN", 1)
+	if err := s.Cards().Upsert(ctx, oldCard); err != nil {
+		t.Fatalf("seed card: %v", err)
+	}
+	if err := s.Sets().Upsert(ctx, oldSet); err != nil {
+		t.Fatalf("seed set: %v", err)
+	}
+	if err := s.SyncState().MarkOK(ctx, 1, "old-build"); err != nil {
+		t.Fatalf("seed state: %v", err)
+	}
+
+	newCard, _ := sampleCard(t, "unl-001", "New", "UNL", 1)
+	err := s.SyncSnapshot(ctx, []store.CardRow{newCard}, []store.SetRow{{SetID: "UNL", CardCount: 1}}, 1, "new-build")
+	if err == nil {
+		t.Fatal("SyncSnapshot returned nil for invalid set payload")
+	}
+	if _, err := s.Cards().GetByRiftboundID(ctx, "ogn-001"); err != nil {
+		t.Fatalf("old card was not preserved: %v", err)
+	}
+	if _, err := s.Cards().GetByRiftboundID(ctx, "unl-001"); !errors.Is(err, sql.ErrNoRows) {
+		t.Fatalf("new card lookup error = %v, want ErrNoRows after rollback", err)
+	}
+	state, err := s.SyncState().Get(ctx)
+	if err != nil {
+		t.Fatalf("get state: %v", err)
+	}
+	if state.LastBuildID != "old-build" || state.LastStatus != domain.SyncStatusOK {
+		t.Fatalf("state = %+v, want old successful state after rollback", state)
 	}
 }
 

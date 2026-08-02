@@ -68,8 +68,8 @@ type CardSet struct {
 
 // Media is the image and artist info.
 type Media struct {
-	ImageURL         string  `json:"image_url"`
-	Artist           *string `json:"artist"`
+	ImageURL          string  `json:"image_url"`
+	Artist            *string `json:"artist"`
 	AccessibilityText *string `json:"accessibility_text"`
 }
 
@@ -77,9 +77,9 @@ type Media struct {
 // only field that's nullable in a meaningful way — it is null when the
 // upstream doesn't provide it (always, for gallery-sourced cards).
 type Metadata struct {
-	CleanName    string `json:"clean_name"`
+	CleanName    string  `json:"clean_name"`
 	UpdatedOn    *string `json:"updated_on"`
-	AlternateArt bool   `json:"alternate_art"`
-	Overnumbered bool   `json:"overnumbered"`
-	Signature    bool   `json:"signature"`
+	AlternateArt bool    `json:"alternate_art"`
+	Overnumbered bool    `json:"overnumbered"`
+	Signature    bool    `json:"signature"`
 }

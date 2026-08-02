@@ -24,9 +24,9 @@ var migrationsFS embed.FS
 //
 // Migration versions are the leading numeric prefix of the filename
 // ("001_init.sql" → "001"). The set of applied versions is stored in
-// a side table called schema_migrations. The table is created in the
-// same transaction as the first migration to avoid a race between two
-// processes starting up at the same time.
+// a side table called schema_migrations. SQLite serialises the migration
+// writes, and recording a version is idempotent so two processes can start
+// at the same time without losing a migration.
 func Migrate(ctx context.Context, db *sql.DB) error {
 	// Inline the schema_migrations bootstrap. The CREATE TABLE here
 	// must match the column names used by record() below.
@@ -93,7 +93,7 @@ func applyMigration(ctx context.Context, db *sql.DB, name, version string) error
 		return fmt.Errorf("exec %s: %w", name, err)
 	}
 	if _, err := tx.ExecContext(ctx,
-		`INSERT INTO schema_migrations (version) VALUES (?)`,
+		`INSERT OR IGNORE INTO schema_migrations (version) VALUES (?)`,
 		version,
 	); err != nil {
 		return fmt.Errorf("record %s: %w", name, err)

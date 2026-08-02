@@ -3,7 +3,7 @@
 // scraper and the API read and write through.
 //
 // The connection uses WAL mode and a single *sql.DB per process. The
-// scraper replaces the card set in a single transaction (see
-// CardRepo.SyncCards) so the store is never in a partial state.
+// scraper replaces cards, sets, and sync metadata in a single transaction
+// (see Store.SyncSnapshot) so the store is never in a partial state.
 // See docs/IMPLEMENTATION_PLAN.md §1 for the full design.
 package store

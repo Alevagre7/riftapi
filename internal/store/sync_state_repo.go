@@ -22,6 +22,10 @@ func NewSyncStateRepo(db *sql.DB) *SyncStateRepo { return &SyncStateRepo{db: db}
 // row, so Get always returns a non-nil *SyncState; the fields are zero
 // values until the first sync run updates them.
 func (r *SyncStateRepo) Get(ctx context.Context) (*domain.SyncState, error) {
+	return getSyncState(ctx, r.db)
+}
+
+func getSyncState(ctx context.Context, queryer sqlQueryer) (*domain.SyncState, error) {
 	const q = `
 		SELECT last_sync_at, last_status, last_card_count, last_build_id, last_error
 		FROM sync_state WHERE id = 1
@@ -34,7 +38,7 @@ func (r *SyncStateRepo) Get(ctx context.Context) (*domain.SyncState, error) {
 		lastBuild  sql.NullString
 		lastError  sql.NullString
 	)
-	err := r.db.QueryRowContext(ctx, q).Scan(
+	err := queryer.QueryRowContext(ctx, q).Scan(
 		&lastSync, &lastStatus, &lastCount, &lastBuild, &lastError,
 	)
 	if err != nil {
@@ -66,6 +70,13 @@ func (r *SyncStateRepo) Get(ctx context.Context) (*domain.SyncState, error) {
 // preserved (the WHERE clause matches id=1) so a concurrent Update
 // from another process is detected by the row count.
 func (r *SyncStateRepo) Update(ctx context.Context, s *domain.SyncState) error {
+	return updateSyncState(ctx, r.db, s)
+}
+
+func updateSyncState(ctx context.Context, execer sqlExecer, s *domain.SyncState) error {
+	if s == nil {
+		return fmt.Errorf("sync state is nil")
+	}
 	const q = `
 		UPDATE sync_state
 		SET last_sync_at = ?, last_status = ?, last_card_count = ?,
@@ -86,7 +97,7 @@ func (r *SyncStateRepo) Update(ctx context.Context, s *domain.SyncState) error {
 	if s.LastError != "" {
 		lastError = sql.NullString{String: s.LastError, Valid: true}
 	}
-	res, err := r.db.ExecContext(ctx, q,
+	res, err := execer.ExecContext(ctx, q,
 		lastSync, string(s.LastStatus), s.LastSyncInputCount, lastBuild, lastError,
 	)
 	if err != nil {
@@ -103,16 +114,16 @@ func (r *SyncStateRepo) Update(ctx context.Context, s *domain.SyncState) error {
 }
 
 // MarkOK is a convenience for the common success path. It stamps
-// last_sync_at = now and writes the supplied input card count + build
-// id. The input count is the number of cards fed into the sync
-// (pre-dedup); it is stored as last_sync_input_count.
+// last_sync_at = now and writes the supplied accepted card count + build
+// id. It is stored as last_sync_input_count for compatibility with the
+// existing schema and API field name.
 func (r *SyncStateRepo) MarkOK(ctx context.Context, inputCount int, buildID string) error {
 	now := time.Now().UTC()
 	return r.Update(ctx, &domain.SyncState{
-		LastSyncAt:        &now,
-		LastStatus:        domain.SyncStatusOK,
+		LastSyncAt:         &now,
+		LastStatus:         domain.SyncStatusOK,
 		LastSyncInputCount: inputCount,
-		LastBuildID:       buildID,
+		LastBuildID:        buildID,
 	})
 }
 
@@ -126,8 +137,8 @@ func (r *SyncStateRepo) MarkFailed(ctx context.Context, err error) error {
 		msg = err.Error()
 	}
 	return r.Update(ctx, &domain.SyncState{
-		LastSyncAt:  &now,
-		LastStatus:  domain.SyncStatusFailed,
-		LastError:   msg,
+		LastSyncAt: &now,
+		LastStatus: domain.SyncStatusFailed,
+		LastError:  msg,
 	})
 }

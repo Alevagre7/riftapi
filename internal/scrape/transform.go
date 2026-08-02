@@ -15,9 +15,11 @@ package scrape
 import (
 	"encoding/json"
 	"fmt"
+	"html"
 	"regexp"
 	"strconv"
 	"strings"
+	"unicode"
 
 	"github.com/xalevagre7/riftapi/internal/domain"
 )
@@ -32,22 +34,22 @@ import (
 // when their inner values are empty arrays).
 
 type galleryCard struct {
-	ID              string                `json:"id"`
-	CollectorNumber int                   `json:"collectorNumber"`
-	Name            string                `json:"name"`
-	Set             gallerySet            `json:"set"`
-	CardType        galleryCardType       `json:"cardType"`
-	PublicCode      string                `json:"publicCode"`
-	Rarity          galleryRarity         `json:"rarity"`
-	Domain          galleryDomain         `json:"domain"`
-	CardImage       galleryImage          `json:"cardImage"`
-	Orientation     string                `json:"orientation"`
-	Illustrator     galleryIllustrator    `json:"illustrator"`
-	Text            galleryText           `json:"text"`
-	Energy          *galleryStat          `json:"energy"`
-	Might           *galleryStat          `json:"might"`
-	Power           *galleryStat          `json:"power"`
-	Tags            *galleryTags          `json:"tags"`
+	ID              string             `json:"id"`
+	CollectorNumber int                `json:"collectorNumber"`
+	Name            string             `json:"name"`
+	Set             gallerySet         `json:"set"`
+	CardType        galleryCardType    `json:"cardType"`
+	PublicCode      string             `json:"publicCode"`
+	Rarity          galleryRarity      `json:"rarity"`
+	Domain          galleryDomain      `json:"domain"`
+	CardImage       galleryImage       `json:"cardImage"`
+	Orientation     string             `json:"orientation"`
+	Illustrator     galleryIllustrator `json:"illustrator"`
+	Text            galleryText        `json:"text"`
+	Energy          *galleryStat       `json:"energy"`
+	Might           *galleryStat       `json:"might"`
+	Power           *galleryStat       `json:"power"`
+	Tags            *galleryTags       `json:"tags"`
 }
 
 type gallerySet struct {
@@ -111,7 +113,7 @@ func (g *galleryNamedItem) UnmarshalJSON(data []byte) error {
 }
 
 type galleryRarity struct {
-	Label string          `json:"label"`
+	Label string           `json:"label"`
 	Value galleryNamedItem `json:"value"`
 }
 
@@ -141,7 +143,7 @@ type galleryText struct {
 }
 
 type galleryStat struct {
-	Label string          `json:"label"`
+	Label string           `json:"label"`
 	Value galleryNamedItem `json:"value"`
 }
 
@@ -153,7 +155,7 @@ type galleryTags struct {
 // --- transform -------------------------------------------------------------
 
 // TransformCard converts a single gallery card (as raw JSON) into the
-	// wire shape. The setMaxs map provides per-set collector
+// wire shape. The setMaxs map provides per-set collector
 // maxima so the transformer can detect overnumbered prints; pass an
 // empty map (not nil) if the caller has not pre-loaded the set
 // metadata. With an empty map the overnumbered flag is conservatively
@@ -176,7 +178,10 @@ func TransformCard(raw []byte, setMaxs map[string]int) (*domain.Card, error) {
 	}
 
 	riftboundID := deriveRiftboundID(gc.ID)
-	setID := gc.Set.Value.ID
+	setID := strings.TrimSpace(gc.Set.Value.ID)
+	if setID == "" {
+		return nil, fmt.Errorf("gallery card %s has empty set id", gc.ID)
+	}
 	setMax := setMaxs[setID]
 
 	card := &domain.Card{
@@ -216,7 +221,11 @@ func TransformCard(raw []byte, setMaxs map[string]int) (*domain.Card, error) {
 		},
 	}
 
-	if attrs := buildAttributes(gc.Energy, gc.Might, gc.Power); attrs != nil {
+	attrs, err := buildAttributes(gc.Energy, gc.Might, gc.Power)
+	if err != nil {
+		return nil, fmt.Errorf("gallery card %s has invalid attributes: %w", gc.ID, err)
+	}
+	if attrs != nil {
 		card.Attributes = attrs
 	}
 
@@ -257,12 +266,11 @@ func firstLabelPtr(items []galleryNamedItem) *string {
 	if len(items) == 0 {
 		return nil
 	}
-	s := items[0].Label
-	return &s
+	return nilPtrIfEmpty(items[0].Label)
 }
 
 // domainLabels returns the label of each named item, or an empty slice
-	// (not nil) when the input is empty — the contract uses
+// (not nil) when the input is empty — the contract uses
 // `[]` rather than `null` for empty domain arrays.
 func domainLabels(items []galleryNamedItem) []string {
 	out := make([]string, 0, len(items))
@@ -298,31 +306,46 @@ func cardTags(gt *galleryTags) *[]string {
 // a string in `value.id` (e.g. "3"); strconv.Atoi parses it. If all
 // three are missing, returns nil so the Attributes field is omitted
 // from the JSON output (omitempty).
-func buildAttributes(energy, might, power *galleryStat) *domain.Attributes {
+func buildAttributes(energy, might, power *galleryStat) (*domain.Attributes, error) {
 	var a domain.Attributes
 	set := false
-	if energy != nil {
-		if n, err := strconv.Atoi(energy.Value.Label); err == nil {
-			a.Energy = &n
-			set = true
-		}
+	if n, present, err := parseStat(energy); err != nil {
+		return nil, fmt.Errorf("energy: %w", err)
+	} else if present {
+		a.Energy = &n
+		set = true
 	}
-	if might != nil {
-		if n, err := strconv.Atoi(might.Value.Label); err == nil {
-			a.Might = &n
-			set = true
-		}
+	if n, present, err := parseStat(might); err != nil {
+		return nil, fmt.Errorf("might: %w", err)
+	} else if present {
+		a.Might = &n
+		set = true
 	}
-	if power != nil {
-		if n, err := strconv.Atoi(power.Value.Label); err == nil {
-			a.Power = &n
-			set = true
-		}
+	if n, present, err := parseStat(power); err != nil {
+		return nil, fmt.Errorf("power: %w", err)
+	} else if present {
+		a.Power = &n
+		set = true
 	}
 	if !set {
-		return nil
+		return nil, nil
 	}
-	return &a
+	return &a, nil
+}
+
+func parseStat(stat *galleryStat) (int, bool, error) {
+	if stat == nil {
+		return 0, false, nil
+	}
+	value := strings.TrimSpace(stat.Value.Label)
+	if value == "" {
+		value = strings.TrimSpace(stat.Value.ID)
+	}
+	n, err := strconv.Atoi(value)
+	if err != nil {
+		return 0, false, fmt.Errorf("value %q is not an integer", value)
+	}
+	return n, true, nil
 }
 
 // --- text helpers ----------------------------------------------------------
@@ -336,29 +359,13 @@ var htmlTagRE = regexp.MustCompile(`<[^>]*>`)
 // inside card text. The full HTML5 set is large; this is the subset
 // the gallery has been observed to use (per
 // docs/research/playriftbound-card-gallery.md §2).
-var htmlEntityRE = regexp.MustCompile(`&(amp|lt|gt|quot|#39);`)
-
 // stripHTML removes HTML tags and decodes the common entities from s.
 // Runs of whitespace (including those left by stripped tags) are
 // collapsed to a single space and the result is trimmed. Suitable
-	// for the text.plain field.
+// for the text.plain field.
 func stripHTML(s string) string {
 	s = htmlTagRE.ReplaceAllString(s, "")
-	s = htmlEntityRE.ReplaceAllStringFunc(s, func(m string) string {
-		switch m {
-		case "&amp;":
-			return "&"
-		case "&lt;":
-			return "<"
-		case "&gt;":
-			return ">"
-		case "&quot;":
-			return "\""
-		case "&#39;":
-			return "'"
-		}
-		return m
-	})
+	s = html.UnescapeString(s)
 	return strings.Join(strings.Fields(s), " ")
 }
 
@@ -366,23 +373,21 @@ func stripHTML(s string) string {
 // with word-separating punctuation (commas, periods, semicolons,
 // parentheses) replaced by spaces, and intra-word marks (apostrophes,
 // hyphens that join words in TCG names like "Kai'Sa") stripped
-	// entirely. Runs of whitespace are collapsed. Used for the
+// entirely. Runs of whitespace are collapsed. Used for the
 // metadata.clean_name field.
 //
-//   "Abandon"              → "abandon"
-//   "Jinx, Loose Cannon"   → "jinx loose cannon"
-//   "Kai'Sa, Void"         → "kaisa void"
+//	"Abandon"              → "abandon"
+//	"Jinx, Loose Cannon"   → "jinx loose cannon"
+//	"Kai'Sa, Void"         → "kaisa void"
 func cleanName(name string) string {
 	lower := strings.ToLower(name)
 	var b strings.Builder
 	b.Grow(len(lower))
 	for _, r := range lower {
 		switch {
-		case r >= 'a' && r <= 'z':
+		case unicode.IsLetter(r) || unicode.IsDigit(r):
 			b.WriteRune(r)
-		case r >= '0' && r <= '9':
-			b.WriteRune(r)
-		case r == '\'' || r == '-':
+		case r == '\'' || r == '’' || r == '-' || r == '‐' || r == '‑':
 			// Intra-word marks: drop entirely so "Kai'Sa" searches
 			// the same as "Kaisa".
 		default:
@@ -414,15 +419,15 @@ func isAlternateArt(riftboundID string) bool {
 	}
 	for j := 0; j < n-1; j++ {
 		c := collector[j]
-		if c >= '0' && c <= '9' {
-			return true
+		if c < '0' || c > '9' {
+			return false
 		}
 	}
-	return false
+	return true
 }
 
 // hasSignatureSuperType reports whether items contains an entry with
-	// id "signature". The metadata.signature flag is derived
+// id "signature". The metadata.signature flag is derived
 // from this — the gallery does not expose the flag directly.
 func hasSignatureSuperType(items []galleryNamedItem) bool {
 	for _, it := range items {

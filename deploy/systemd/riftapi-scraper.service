@@ -1,0 +1,19 @@
+[Unit]
+Description=riftapi card-data scraper
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=oneshot
+WorkingDirectory=/opt/riftapi
+
+# Build or copy the binaries into /opt/riftapi/bin before enabling the timer.
+ExecStart=/opt/riftapi/bin/riftapi-scraper
+EnvironmentFile=/etc/riftapi/riftapi.env
+
+StandardOutput=journal
+StandardError=journal
+TimeoutStartSec=600
+
+User=riftapi
+Group=riftapi

@@ -52,7 +52,7 @@ const upsertSQL = `
 // validate it (the transformer is the only writer and produces valid
 // JSON by construction).
 func (r *CardRepo) Upsert(ctx context.Context, row CardRow) error {
-	if _, err := r.db.ExecContext(ctx, upsertSQL, r.args(row)...); err != nil {
+	if _, err := execCardUpsert(ctx, r.db, row); err != nil {
 		return fmt.Errorf("upsert card %s: %w", row.RiftboundID, err)
 	}
 	return nil
@@ -68,32 +68,14 @@ func (r *CardRepo) Upsert(ctx context.Context, row CardRow) error {
 //
 // If rows is empty, every card in the store is deleted.
 func (r *CardRepo) SyncCards(ctx context.Context, rows []CardRow) error {
-	if len(rows) == 0 {
-		_, err := r.db.ExecContext(ctx, "DELETE FROM cards")
-		return err
-	}
-
 	tx, err := r.db.BeginTx(ctx, nil)
 	if err != nil {
 		return fmt.Errorf("begin tx: %w", err)
 	}
 	defer func() { _ = tx.Rollback() }()
 
-	for _, row := range rows {
-		if _, err := tx.ExecContext(ctx, upsertSQL, r.args(row)...); err != nil {
-			return fmt.Errorf("upsert card %s: %w", row.RiftboundID, err)
-		}
-	}
-
-	placeholders := make([]string, len(rows))
-	args := make([]any, len(rows))
-	for i, row := range rows {
-		placeholders[i] = "?"
-		args[i] = row.RiftboundID
-	}
-	del := "DELETE FROM cards WHERE riftbound_id NOT IN (" + strings.Join(placeholders, ",") + ")"
-	if _, err := tx.ExecContext(ctx, del, args...); err != nil {
-		return fmt.Errorf("delete stale cards: %w", err)
+	if err := replaceCards(ctx, tx, rows); err != nil {
+		return err
 	}
 	return tx.Commit()
 }
@@ -101,6 +83,10 @@ func (r *CardRepo) SyncCards(ctx context.Context, rows []CardRow) error {
 // args converts a CardRow to the parameter slice for upsertSQL. The
 // PublicCode column is nullable; everything else is non-null.
 func (r *CardRepo) args(row CardRow) []any {
+	return cardArgs(row)
+}
+
+func cardArgs(row CardRow) []any {
 	var publicCode sql.NullString
 	if row.PublicCode != "" {
 		publicCode = sql.NullString{String: row.PublicCode, Valid: true}
@@ -113,7 +99,7 @@ func (r *CardRepo) args(row CardRow) []any {
 
 // GetByRiftboundID returns the card with the given riftbound_id (e.g.
 // "ogn-011") or sql.ErrNoRows if no such card exists. The match is
-	// case-insensitive; the wire format is case-sensitive but
+// case-insensitive; the wire format is case-sensitive but
 // the bot's existing adapter is liberal in this regard.
 func (r *CardRepo) GetByRiftboundID(ctx context.Context, id string) (*CardRow, error) {
 	const q = `
@@ -123,14 +109,27 @@ func (r *CardRepo) GetByRiftboundID(ctx context.Context, id string) (*CardRow, e
 	return r.scanOne(ctx, q, id)
 }
 
-// GetByName returns the unique card whose name matches exactly
-// (case-insensitive), or sql.ErrNoRows if none exists.
+// GetByName returns the first card whose name matches exactly
+// (case-insensitive), or sql.ErrNoRows if none exists. Callers that need
+// alternate-art or other same-name variants should use SearchByExactName.
 func (r *CardRepo) GetByName(ctx context.Context, name string) (*CardRow, error) {
 	const q = `
 		SELECT riftbound_id, public_code, set_id, collector_number, name, clean_name, payload
 		FROM cards WHERE name = ? COLLATE NOCASE
 	`
 	return r.scanOne(ctx, q, name)
+}
+
+// SearchByExactName returns every card whose name matches exactly,
+// case-insensitively. Alternate art and other variants can share a name,
+// so an exact name lookup must not discard all but the first row.
+func (r *CardRepo) SearchByExactName(ctx context.Context, name string) ([]*CardRow, error) {
+	const q = `
+		SELECT riftbound_id, public_code, set_id, collector_number, name, clean_name, payload
+		FROM cards WHERE name = ? COLLATE NOCASE
+		ORDER BY name, set_id, collector_number, riftbound_id
+	`
+	return r.scanMany(ctx, q, name)
 }
 
 // SearchByName returns cards whose name OR clean_name contains the
@@ -156,7 +155,7 @@ func (r *CardRepo) SearchByName(ctx context.Context, query string, limit int) ([
 // ListNames returns all card names sorted alphabetically. Used by the
 // /index/card-names endpoint.
 func (r *CardRepo) ListNames(ctx context.Context) ([]string, error) {
-	rows, err := r.db.QueryContext(ctx, `SELECT name FROM cards ORDER BY name`)
+	rows, err := r.db.QueryContext(ctx, `SELECT DISTINCT name FROM cards ORDER BY name`)
 	if err != nil {
 		return nil, err
 	}
@@ -221,7 +220,7 @@ type ListCardsOptions struct {
 // List returns cards matching the filter (set_id, sort, page, size),
 // paginated. Returns the rows, the total count before pagination,
 // and any error. The total is the count of rows matching the
-	// filter, matching the search-response total field.
+// filter, matching the search-response total field.
 func (r *CardRepo) List(ctx context.Context, opts ListCardsOptions) ([]*CardRow, int, error) {
 	return r.queryCards(ctx, opts, "")
 }
@@ -237,6 +236,12 @@ func (r *CardRepo) SearchText(ctx context.Context, query string, opts ListCardsO
 }
 
 func (r *CardRepo) queryCards(ctx context.Context, opts ListCardsOptions, textQuery string) ([]*CardRow, int, error) {
+	tx, err := r.db.BeginTx(ctx, nil)
+	if err != nil {
+		return nil, 0, fmt.Errorf("begin read tx: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+
 	where := []string{}
 	args := []any{}
 
@@ -264,22 +269,11 @@ func (r *CardRepo) queryCards(ctx context.Context, opts ListCardsOptions, textQu
 
 	var total int
 	countQuery := "SELECT COUNT(1) FROM cards" + whereClause
-	if err := r.db.QueryRowContext(ctx, countQuery, args...).Scan(&total); err != nil {
+	if err := tx.QueryRowContext(ctx, countQuery, args...).Scan(&total); err != nil {
 		return nil, 0, err
 	}
 
-	page := opts.Page
-	if page < 1 {
-		page = 1
-	}
-	size := opts.Size
-	if size < 1 {
-		size = 50
-	}
-	if size > 100 {
-		size = 100
-	}
-	offset := (page - 1) * size
+	_, size, offset := normalizePagination(opts.Page, opts.Size)
 
 	sortColumn := sortColumnFor(opts.Sort)
 	direction := "ASC"
@@ -293,8 +287,14 @@ func (r *CardRepo) queryCards(ctx context.Context, opts ListCardsOptions, textQu
 	)
 	args = append(args, size, offset)
 
-	rows, err := r.scanMany(ctx, query, args...)
-	return rows, total, err
+	rows, err := scanMany(ctx, tx, query, args...)
+	if err != nil {
+		return nil, 0, err
+	}
+	if err := tx.Commit(); err != nil {
+		return nil, 0, fmt.Errorf("commit read tx: %w", err)
+	}
+	return rows, total, nil
 }
 
 func sortColumnFor(s string) string {
@@ -407,7 +407,11 @@ func (r *CardRepo) scanOne(ctx context.Context, q string, args ...any) (*CardRow
 }
 
 func (r *CardRepo) scanMany(ctx context.Context, q string, args ...any) ([]*CardRow, error) {
-	rows, err := r.db.QueryContext(ctx, q, args...)
+	return scanMany(ctx, r.db, q, args...)
+}
+
+func scanMany(ctx context.Context, queryer sqlQueryer, q string, args ...any) ([]*CardRow, error) {
+	rows, err := queryer.QueryContext(ctx, q, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -420,7 +424,20 @@ func (r *CardRepo) scanMany(ctx context.Context, q string, args ...any) ([]*Card
 		}
 		out = append(out, row)
 	}
-	return out, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+// sqlQueryer is implemented by *sql.DB and *sql.Tx. It lets count-and-page
+// reads use one snapshot without duplicating the row scanner.
+type sqlQueryer interface {
+	QueryContext(context.Context, string, ...any) (*sql.Rows, error)
+	QueryRowContext(context.Context, string, ...any) *sql.Row
 }
 
 // rowScanner is satisfied by both *sql.Row and *sql.Rows, so the same

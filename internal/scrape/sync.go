@@ -5,6 +5,9 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"sort"
+	"strings"
+	"time"
 
 	"github.com/xalevagre7/riftapi/internal/domain"
 	"github.com/xalevagre7/riftapi/internal/health"
@@ -19,7 +22,7 @@ import (
 // WAL mode, so reads see the new data as it lands.
 //
 // The Syncer owns no goroutines and is safe to run from a single
-	// caller (the riftapi-scraper binary, in our case).
+// caller (the riftapi-scraper binary, in our case).
 type Syncer struct {
 	// Store is the local SQLite store the syncer writes to. Required.
 	Store *store.Store
@@ -84,8 +87,8 @@ func (s *Syncer) Run(ctx context.Context) error {
 		return s.fail(ctx, fmt.Errorf("parse: %w", err))
 	}
 
-	repo := s.Store.Cards()
 	rows := make([]store.CardRow, 0, len(page.CardJSONs))
+	seenIDs := make(map[string]struct{}, len(page.CardJSONs))
 	// setsByID accumulates the (label, card_count) per set_id as we
 	// process each card. The label is taken from the first card's
 	// set reference; the upstream's blades[2].sets.items[] may not
@@ -96,12 +99,16 @@ func (s *Syncer) Run(ctx context.Context) error {
 	for i, raw := range page.CardJSONs {
 		card, err := TransformCard(raw, page.CollectorMaxBySet)
 		if err != nil {
-			// Don't abort the whole sync on one bad card; log and
-			// continue. A persistent parser error will be caught by
-			// MinCount at the end of the run.
-			log.Printf("warn: transform card %d failed: %v", i, err)
-			continue
+			// A partially transformed snapshot is more dangerous than a
+			// failed sync: MinCount could still pass while silently
+			// dropping a real card. Keep the previous snapshot instead.
+			return s.fail(ctx, fmt.Errorf("transform card %d: %w", i, err))
 		}
+		idKey := strings.ToLower(card.RiftboundID)
+		if _, exists := seenIDs[idKey]; exists {
+			return s.fail(ctx, fmt.Errorf("duplicate card id %q in upstream payload", card.RiftboundID))
+		}
+		seenIDs[idKey] = struct{}{}
 		payload, err := store.EncodeCard(card)
 		if err != nil {
 			return s.fail(ctx, fmt.Errorf("encode card %s: %w", card.RiftboundID, err))
@@ -124,36 +131,26 @@ func (s *Syncer) Run(ctx context.Context) error {
 		m.count++
 	}
 
-	// SyncCards is a single transaction that upserts every row and
-	// deletes any pre-existing card whose riftbound_id is not in the
-	// new set. The result is that the store always contains exactly
-	// the cards from the most recent successful sync — no stale
-	// cards accumulate.
-	if err := repo.SyncCards(ctx, rows); err != nil {
-		return s.fail(ctx, fmt.Errorf("sync cards: %w", err))
-	}
 	count := len(rows)
-
-	// Upsert the sets seen in this run. Done after the card
-	// transaction so a set-row write failure doesn't roll back a
-	// successful card sync. The set_count column reflects the
-	// actual number of cards per set (not the upstream's
-	// collectorNumberMax, which excludes variants).
-	if err := s.upsertSets(ctx, setsByID); err != nil {
-		return s.fail(ctx, fmt.Errorf("upsert sets: %w", err))
-	}
 
 	if s.MinCount > 0 && count < s.MinCount {
 		return s.fail(ctx, fmt.Errorf("only %d cards parsed, want >= %d", count, s.MinCount))
 	}
 	for _, id := range s.Required {
-		if _, err := repo.GetByRiftboundID(ctx, id); err != nil {
-			return s.fail(ctx, fmt.Errorf("required card %s missing: %w", id, err))
+		if _, ok := seenIDs[strings.ToLower(id)]; !ok {
+			return s.fail(ctx, fmt.Errorf("required card %s missing", id))
 		}
 	}
 
-	if err := s.Store.SyncState().MarkOK(ctx, count, s.BuildID); err != nil {
-		return s.fail(ctx, fmt.Errorf("mark ok: %w", err))
+	setRows, err := buildSetRows(setsByID)
+	if err != nil {
+		return s.fail(ctx, err)
+	}
+	// Cards, sets, and the successful sync state are committed together.
+	// Validation happens before this call so a partial upstream payload can
+	// never replace the last known-good snapshot.
+	if err := s.Store.SyncSnapshot(ctx, rows, setRows, count, s.BuildID); err != nil {
+		return s.fail(ctx, fmt.Errorf("sync snapshot: %w", err))
 	}
 	log.Printf("sync ok: %d cards", count)
 	return nil
@@ -163,40 +160,50 @@ func (s *Syncer) Run(ctx context.Context) error {
 // is configured, and returns the original error so the caller can
 // decide what to do (typically: exit non-zero so systemd restarts on
 // the next scheduled run).
-func (s *Syncer) fail(ctx context.Context, err error) error {
+func (s *Syncer) fail(_ context.Context, err error) error {
 	log.Printf("sync failed: %v", err)
-	if markErr := s.Store.SyncState().MarkFailed(ctx, err); markErr != nil {
+	// The caller's context is often the one that timed out. Use a short,
+	// independent context so the failure state and alert still have a
+	// chance to be recorded after an upstream timeout or cancellation.
+	failureCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	if markErr := s.Store.SyncState().MarkFailed(failureCtx, err); markErr != nil {
 		log.Printf("mark failed: %v", markErr)
 	}
-	if alertErr := s.Alert.Send(ctx, fmt.Sprintf("riftapi sync failed: %v", err)); alertErr != nil {
+	message := fmt.Sprintf("riftapi sync failed: %v", err)
+	if len(message) > 4000 {
+		message = message[:4000] + "…"
+	}
+	if alertErr := s.Alert.Send(failureCtx, message); alertErr != nil {
 		log.Printf("alert send failed: %v", alertErr)
 	}
 	return err
 }
 
-// upsertSets writes one row per set seen in this run. TCGPlayerID,
+// buildSetRows creates one row per set seen in this run. TCGPlayerID,
 // CardmarketID, and PublishedOn are always nil — the gallery does
 // not provide them (ADR-0001) and the Set's ID is the set_id (we
-	// don't have opaque internal UUIDs).
-func (s *Syncer) upsertSets(ctx context.Context, sets map[string]*setMeta) error {
-	if len(sets) == 0 {
-		return nil
+// don't have opaque internal UUIDs).
+func buildSetRows(sets map[string]*setMeta) ([]store.SetRow, error) {
+	setIDs := make([]string, 0, len(sets))
+	for setID := range sets {
+		setIDs = append(setIDs, setID)
 	}
-	setRepo := s.Store.Sets()
-	for setID, m := range sets {
+	sort.Strings(setIDs)
+	rows := make([]store.SetRow, 0, len(setIDs))
+	for _, setID := range setIDs {
+		m := sets[setID]
 		payload, err := encodeSetPayload(setID, m.label, m.count)
 		if err != nil {
-			return fmt.Errorf("encode set %s: %w", setID, err)
+			return nil, fmt.Errorf("encode set %s: %w", setID, err)
 		}
-		if err := setRepo.Upsert(ctx, store.SetRow{
+		rows = append(rows, store.SetRow{
 			SetID:     setID,
 			CardCount: m.count,
 			Payload:   payload,
-		}); err != nil {
-			return fmt.Errorf("upsert set %s: %w", setID, err)
-		}
+		})
 	}
-	return nil
+	return rows, nil
 }
 
 // encodeSetPayload serialises a domain.Set to the JSON blob stored

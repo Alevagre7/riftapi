@@ -1,8 +1,9 @@
 # riftapi Runbook
 
 Operational reference for the self-hosted riftapi. Assumes the
-deployment described in [`deploy/`](../deploy/) (systemd timer +
-docker compose + Caddy reverse proxy + nightly backup).
+deployment described in [`deploy/`](../deploy/): a systemd timer,
+the native scraper binary, a long-running API process, Caddy, and a
+nightly backup.
 
 ## Topology
 
@@ -10,7 +11,7 @@ docker compose + Caddy reverse proxy + nightly backup).
 ┌────────────────────────┐    ┌────────────────────────────────────────┐
 │  playriftbound.com     │    │  your host                              │
 │  (the upstream)         │ <─ │  ┌─ riftapi (long-running API process) │
-│  HTTPS GET              │    │  └─ riftapi-sync (one-shot, scheduled)│
+│  HTTPS GET              │    │  └─ riftapi-scraper (one-shot)        │
 └────────────────────────┘    └────────────────────────────────────────┘
                                                             │
                                                             ▼
@@ -20,23 +21,23 @@ docker compose + Caddy reverse proxy + nightly backup).
                                                 └────────────────────────┘
 ```
 
-The API process runs as a long-lived Docker container with
-`restart: unless-stopped`. The sync is a one-shot container run by
-the systemd timer at 03:00 every night. Backups run from cron at
-04:00, an hour after the sync.
+The API process is long-lived under the host's process supervisor. The
+scraper is a one-shot binary run by the systemd timer at 03:00 every
+night. Backups run from cron at 04:00, an hour after the scraper.
 
 ## Where things live
 
 | Thing | Path |
 |---|---|
 | Repo (this directory) | `/opt/riftapi` |
-| SQLite database | `/data/riftapi.db` (named volume `riftapi-data`) |
+| SQLite database | `/data/riftapi.db` (or the configured database path) |
 | Backups | `/var/backups/riftapi/` |
-| systemd units | `/etc/systemd/system/riftapi-sync.{service,timer}` |
+| API systemd unit | `/etc/systemd/system/riftapi.service` |
+| Scraper systemd units | `/etc/systemd/system/riftapi-scraper.{service,timer}` |
 | Sync env vars | `/etc/riftapi/riftapi.env` |
 | Caddy config | `/etc/caddy/Caddyfile` (or wherever your distro puts it) |
-| API logs | `journalctl -u riftapi` (compose's logs) |
-| Sync logs | `journalctl -u riftapi-sync.service` |
+| API logs | The API supervisor's logs (for systemd, `journalctl -u riftapi`) |
+| Sync logs | `journalctl -u riftapi-scraper.service` |
 | Backup logs | `/var/log/backup.log` (set up in cron) |
 
 ## Flipping the sync toggle
@@ -51,13 +52,13 @@ sudo $EDITOR /etc/riftapi/riftapi.env
 # Change: RIFTAPI_SYNC_ENABLED=false → RIFTAPI_SYNC_ENABLED=true
 
 # Trigger one sync immediately (don't wait for 03:00)
-sudo systemctl start riftapi-sync.service
+sudo systemctl start riftapi-scraper.service
 
 # Check that it succeeded
-journalctl -u riftapi-sync.service -n 50
+journalctl -u riftapi-scraper.service -n 50
 # Or, after it returns:
 curl -s http://localhost:8080/health
-# → 200 means healthy. 503 means the last sync failed.
+# → 200 means reachable (healthy or degraded). 503 means the last sync failed.
 ```
 
 To turn the sync off again after the release:
@@ -86,16 +87,17 @@ curl -s http://riftapi.lan/health | jq .
 {
   "status": "ok",
   "last_sync_at": "2026-07-19T03:00:42Z",
-  "last_card_count": 1178,
+  "last_sync_input_count": 1178,
   "last_status": "ok",
   "last_error": ""
 }
 ```
 
-`status` is `ok` (HTTP 200) or `unhealthy` (HTTP 503). `unhealthy`
-covers both "the sync never ran" and "the last sync failed"; the
-two are distinguished by `last_status` (empty means never ran,
-`failed` means the syncer returned an error).
+`status` is `ok`, `degraded`, or `error`. `degraded` (HTTP 200) means
+no successful snapshot has met the configured card-count threshold;
+`error` (HTTP 503) means the last run failed or the store is
+unreachable. The `last_status` field distinguishes an initial store
+from a failed run.
 
 For a quick post-mortem, the same fields are in the
 `sync_state` table:
@@ -111,7 +113,7 @@ bot-protection kicked in, or the JSON shape drifted). The first
 step is to read the last error and the recent log:
 
 ```bash
-journalctl -u riftapi-sync.service -n 100
+journalctl -u riftapi-scraper.service -n 100
 sqlite3 /data/riftapi.db "SELECT last_error FROM sync_state"
 ```
 
@@ -119,7 +121,7 @@ If the upstream is the problem, wait a few hours and trigger a
 retry manually:
 
 ```bash
-sudo systemctl start riftapi-sync.service
+sudo systemctl start riftapi-scraper.service
 ```
 
 If you suspect a local problem (wrong config, broken DB), inspect
@@ -130,14 +132,14 @@ the current snapshot before re-syncing:
 sqlite3 /data/riftapi.db "SELECT COUNT(*) FROM cards"
 # What sets?
 sqlite3 /data/riftapi.db "SELECT set_id, card_count FROM sets ORDER BY set_id"
-# Is the syncer's parser finding the upstream's HTML?
-#   (Re-run the scraper with verbose logging.)
-docker compose run --rm sync
+# Is the scraper finding the upstream's HTML? Re-run the service and
+# inspect its journal output.
+sudo systemctl start riftapi-scraper.service
 ```
 
-A fresh `riftapi-sync` run is transactional: it upserts all cards
-from the latest gallery parse and deletes anything that isn't in
-the new set. There's no partial-failure mode — either the new
+A fresh `riftapi-scraper` run is transactional: it replaces cards and
+sets from the latest gallery parse and records success in the same
+SQLite transaction. There's no partial-failure mode — either the new
 snapshot lands, or the old one stays untouched.
 
 ## Restoring from a backup
@@ -149,16 +151,18 @@ specific date, stop the API, replace the file, and restart.
 # 1. Find the backup you want.
 ls -lh /var/backups/riftapi/
 
-# 2. Stop the API container. (The sync timer is safe — it would
-#    just fail fast because the DB is being replaced.)
-sudo docker compose stop api
+# 2. Stop the API process and pause the scraper timer while replacing
+#    the database.
+sudo systemctl stop riftapi
+sudo systemctl stop riftapi-scraper.timer
 
 # 3. Replace the database file.
 sudo cp /var/backups/riftapi/riftapi-2026-07-19.db /data/riftapi.db
-sudo chown 999:999 /data/riftapi.db   # the UID/GID the container runs as
+sudo chown riftapi:riftapi /data/riftapi.db
 
-# 4. Restart the API. The new file is picked up on the next open.
-sudo docker compose start api
+# 4. Restart the API and timer. The new file is picked up on open.
+sudo systemctl start riftapi
+sudo systemctl start riftapi-scraper.timer
 curl -s http://localhost:8080/health
 ```
 
@@ -257,7 +261,7 @@ retried on next boot — but only if `RIFTAPI_SYNC_ENABLED=true`.
 Check both:
 
 ```bash
-systemctl list-timers riftapi-sync
+systemctl list-timers riftapi-scraper
 # → Next: the upcoming 03:00; Last: the last successful or failed fire.
 sudo -u riftapi bash -c 'echo "RIFTAPI_SYNC_ENABLED=$RIFTAPI_SYNC_ENABLED"'
 # → The env file value, after `EnvironmentFile=` expansion.
@@ -266,7 +270,7 @@ sudo -u riftapi bash -c 'echo "RIFTAPI_SYNC_ENABLED=$RIFTAPI_SYNC_ENABLED"'
 If the timer is "loaded but inactive", re-enable it:
 
 ```bash
-sudo systemctl enable --now riftapi-sync.timer
+sudo systemctl enable --now riftapi-scraper.timer
 ```
 
 ## Maintenance cadence
@@ -275,7 +279,7 @@ sudo systemctl enable --now riftapi-sync.timer
 |---|---|
 | Daily (03:00) | Timer fires; sync runs (or no-ops if `RIFTAPI_SYNC_ENABLED=false`). |
 | Daily (04:00) | Cron runs `backup.sh`. |
-| Weekly | Skim `journalctl -u riftapi-sync --since "1 week ago"` for warnings. |
+| Weekly | Skim `journalctl -u riftapi-scraper --since "1 week ago"` for warnings. |
 | Per Spoiler Season | Flip `RIFTAPI_SYNC_ENABLED=true` ~1 day before the first reveal; flip back to `false` the day after the set's full release. |
 | Per Caddy/Raspbian upgrade | Re-read the Caddyfile; Caddy reloads itself automatically. |
 | Per upstream gallery change | Inspect the syncer log, fix the parser, redeploy. |

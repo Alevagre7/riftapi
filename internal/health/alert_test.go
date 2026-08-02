@@ -120,6 +120,20 @@ func TestTelegramSender_ReturnsErrorOnNon200(t *testing.T) {
 	}
 }
 
+func TestTelegramSender_ReturnsErrorWhenAPIReportsFailure(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"ok":false,"description":"chat not found"}`))
+	}))
+	t.Cleanup(server.Close)
+
+	sender := health.NewTelegramSenderWithBaseURL("token", "42", server.URL)
+	err := sender.Send(context.Background(), "x")
+	if err == nil || !strings.Contains(err.Error(), "chat not found") {
+		t.Fatalf("Send error = %v, want Telegram description", err)
+	}
+}
+
 func TestTelegramSender_ReturnsErrorOnNetworkError(t *testing.T) {
 	// A base URL that resolves but refuses connections.
 	sender := health.NewTelegramSenderWithBaseURL("token", "42", "http://127.0.0.1:1")

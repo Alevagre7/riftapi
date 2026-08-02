@@ -23,7 +23,7 @@ type Page struct {
 }
 
 var nextDataRe = regexp.MustCompile(
-	`(?s)<script[^>]*id="__NEXT_DATA__"[^>]*type="application/json"[^>]*>(.*?)</script>`,
+	`(?is)<script\b[^>]*\bid\s*=\s*["']__NEXT_DATA__["'][^>]*>(.*?)</script\s*>`,
 )
 
 // ParsePage extracts the __NEXT_DATA__ JSON from the gallery HTML

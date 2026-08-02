@@ -25,14 +25,7 @@ func NewSetRepo(db *sql.DB) *SetRepo { return &SetRepo{db: db} }
 // Upsert inserts the set or replaces the existing row with the same
 // set_id. The Payload must be valid JSON.
 func (r *SetRepo) Upsert(ctx context.Context, row SetRow) error {
-	const q = `
-		INSERT INTO sets (set_id, card_count, payload)
-		VALUES (?, ?, ?)
-		ON CONFLICT(set_id) DO UPDATE SET
-			card_count = excluded.card_count,
-			payload    = excluded.payload
-	`
-	if _, err := r.db.ExecContext(ctx, q, row.SetID, row.CardCount, row.Payload); err != nil {
+	if _, err := execSetUpsert(ctx, r.db, row); err != nil {
 		return fmt.Errorf("upsert set %s: %w", row.SetID, err)
 	}
 	return nil
@@ -40,7 +33,7 @@ func (r *SetRepo) Upsert(ctx context.Context, row SetRow) error {
 
 // GetByID returns the set with the given set_id (e.g. "ogn") or
 // sql.ErrNoRows if no such set exists. The match is case-insensitive;
-	// set_ids are conventionally lowercase but the contract
+// set_ids are conventionally lowercase but the contract
 // permits any case.
 func (r *SetRepo) GetByID(ctx context.Context, setID string) (*SetRow, error) {
 	const q = `SELECT set_id, card_count, payload FROM sets WHERE set_id = ? COLLATE NOCASE`
@@ -83,25 +76,20 @@ type ListSetsOptions struct {
 // count before pagination, and any error. Page/size are clamped
 // to [1, 100] to match CardRepo.ListCardsOptions behaviour.
 func (r *SetRepo) List(ctx context.Context, opts ListSetsOptions) ([]*SetRow, int, error) {
+	tx, err := r.db.BeginTx(ctx, nil)
+	if err != nil {
+		return nil, 0, fmt.Errorf("begin read tx: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+
 	var total int
-	if err := r.db.QueryRowContext(ctx, `SELECT COUNT(1) FROM sets`).Scan(&total); err != nil {
+	if err := tx.QueryRowContext(ctx, `SELECT COUNT(1) FROM sets`).Scan(&total); err != nil {
 		return nil, 0, err
 	}
 
-	page := opts.Page
-	if page < 1 {
-		page = 1
-	}
-	size := opts.Size
-	if size < 1 {
-		size = 50
-	}
-	if size > 100 {
-		size = 100
-	}
-	offset := (page - 1) * size
+	_, size, offset := normalizePagination(opts.Page, opts.Size)
 
-	rows, err := r.db.QueryContext(ctx,
+	rows, err := tx.QueryContext(ctx,
 		`SELECT set_id, card_count, payload FROM sets ORDER BY set_id LIMIT ? OFFSET ?`,
 		size, offset,
 	)
@@ -116,5 +104,14 @@ func (r *SetRepo) List(ctx context.Context, opts ListSetsOptions) ([]*SetRow, in
 			return nil, 0, err
 		}
 	}
-	return out, total, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, 0, err
+	}
+	if err := rows.Close(); err != nil {
+		return nil, 0, err
+	}
+	if err := tx.Commit(); err != nil {
+		return nil, 0, fmt.Errorf("commit read tx: %w", err)
+	}
+	return out, total, nil
 }

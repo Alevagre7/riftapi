@@ -5,23 +5,26 @@
 #   make test        — run the full test suite
 #   make test PKG=./internal/scrape — run a single package's tests
 #   make vet         — go vet ./...
-#   make fmt         — gofmt -w
+#   make fmt         — format all Go packages
 #   make tidy        — go mod tidy
 #   make docker      — build the API image for linux/arm64 (the Pi target)
 #   make clean       — remove ./bin and coverage files
 #
-# Cross-compilation note: GOOS/GOARCH env vars override the host. The default
-# docker target is linux/arm64 to match the Pi 3B. To produce an amd64 image
-# (e.g. for testing on the dev machine), run `make docker GOARCH=amd64`.
+# Cross-compilation note: GOOS/GOARCH env vars override the host for binary
+# builds. Docker defaults to the Pi target; select the image stage with
+# DOCKER_TARGET=api or DOCKER_TARGET=sync.
 
 BIN_DIR    := bin
 PKG_PREFIX := ./cmd/...
 PKG        ?= ./...
 
 GO         ?= go
-GOOS       ?= linux
-GOARCH     ?= arm64
+GOOS       ?= $(shell $(GO) env GOOS)
+GOARCH     ?= $(shell $(GO) env GOARCH)
 CGO_ENABLED := 0
+
+DOCKER_PLATFORM ?= linux/arm64
+DOCKER_TARGET   ?= api
 
 LDFLAGS    := -s -w
 BUILD_TAGS := -tags 'osusergo,netgo'
@@ -47,13 +50,13 @@ vet:
 	$(GO) vet $(PKG)
 
 fmt:
-	gofmt -w .
+	$(GO) fmt ./...
 
 tidy:
 	$(GO) mod tidy
 
 docker:
-	docker build --platform $(GOOS)/$(GOARCH) -t riftapi:latest .
+	docker build --platform $(DOCKER_PLATFORM) --target $(DOCKER_TARGET) -t riftapi:latest .
 
 clean:
 	rm -rf $(BIN_DIR) coverage.txt coverage.html

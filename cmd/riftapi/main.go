@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"net"
 	"net/http"
 	"os"
 	"os/signal"
@@ -27,11 +28,8 @@ func main() {
 	if err != nil {
 		log.Fatalf("config: %v", err)
 	}
-	if err := cfg.Validate(); err != nil {
-		log.Fatalf("config invalid: %v", err)
-	}
 
-	// The --healthcheck flag is used by docker-compose's healthcheck
+	// The --healthcheck flag is used by container and supervisor healthchecks
 	// to test whether the server is up. It makes a request to the
 	// local /health endpoint and exits 0 on 200, 1 on anything else.
 	// This is a separate path from the server itself — we don't open
@@ -40,6 +38,9 @@ func main() {
 		runHealthcheck(cfg)
 		return
 	}
+	if err := cfg.Validate(); err != nil {
+		log.Fatalf("config invalid: %v", err)
+	}
 
 	st, err := store.Open(context.Background(), cfg.DatabasePath)
 	if err != nil {
@@ -47,11 +48,14 @@ func main() {
 	}
 	defer func() { _ = st.Close() }()
 
-	addr := cfg.APIBind + ":" + strconv.Itoa(cfg.APIPort)
+	addr := net.JoinHostPort(cfg.APIBind, strconv.Itoa(cfg.APIPort))
 	srv := &http.Server{
 		Addr:              addr,
-		Handler:           api.NewServer(st).Routes(),
+		Handler:           api.NewServerWithMinCardCount(st, cfg.SyncMinCardCount).Routes(),
 		ReadHeaderTimeout: 5 * time.Second,
+		ReadTimeout:       15 * time.Second,
+		WriteTimeout:      30 * time.Second,
+		IdleTimeout:       60 * time.Second,
 	}
 
 	serverErr := make(chan error, 1)
@@ -80,10 +84,14 @@ func main() {
 }
 
 // runHealthcheck probes the local /health endpoint and exits 0 on
-// 200, 1 otherwise. The caller is the docker-compose healthcheck
-// (see docker-compose.yml); it is not an interactive command.
+// 200, 1 otherwise. It is intended for container and supervisor probes,
+// not interactive use.
 func runHealthcheck(cfg *config.Config) {
-	url := fmt.Sprintf("http://127.0.0.1:%d/health", cfg.APIPort)
+	host := cfg.APIBind
+	if host == "" || host == "0.0.0.0" || host == "::" {
+		host = "127.0.0.1"
+	}
+	url := fmt.Sprintf("http://%s/health", net.JoinHostPort(host, strconv.Itoa(cfg.APIPort)))
 	client := &http.Client{Timeout: 5 * time.Second}
 	resp, err := client.Get(url)
 	if err != nil {

@@ -4,6 +4,12 @@ Phased build order for `riftapi`, the self-hosted read-only HTTP API that serves
 
 This plan is **dependency-ordered**: each phase produces something runnable and verifiable, and later phases assume the outputs of earlier ones. Strategic decisions from the grill are referenced inline by their ADR or CONTEXT.md entry; do not relitigate them during the build.
 
+> Historical note: the core phases and the repository's operational baseline
+> are implemented, but this document is retained as design history. The
+> unchecked bullets include optional or externally-owned follow-ups. Current
+> operational instructions are in `README.md`, `deploy/README.md`, and
+> `docs/RUNBOOK.md`.
+
 ---
 
 ## How to read this
@@ -16,7 +22,7 @@ This plan is **dependency-ordered**: each phase produces something runnable and 
 
 ## Phase 0 — Project skeleton
 
-**Goal**: a Go module that builds two self-contained static binaries (one for the API, one for the sync) and lives in a directory layout that supports the rest of the plan. The binaries run anywhere Go 1.22+ can target — bare metal, containers, VMs, or your platform of choice. `docker-compose.yml` and the `deploy/` directory are starting points for one common way to run them, not the only way.
+**Goal**: a Go module that builds two self-contained static binaries (one for the API, one for the scraper) and lives in a directory layout that supports the rest of the plan. The binaries run anywhere Go 1.25+ can target — bare metal, containers, VMs, or your platform of choice. The root `Dockerfile` and `deploy/` directory are starting points for common deployments.
 
 **What you build**:
 - [ ] `go mod init github.com/<you>/riftapi`
@@ -25,7 +31,7 @@ This plan is **dependency-ordered**: each phase produces something runnable and 
   riftapi/
   ├── cmd/
   │   ├── riftapi/        # the API server entry point
-  │   └── riftapi-sync/   # the scraper entry point (separate binary, separate concerns)
+  │   └── riftapi-scraper/ # the scraper entry point (separate binary, separate concerns)
   ├── internal/
   │   ├── config/         # env + config-file loader
   │   ├── store/          # SQLite repository
@@ -36,12 +42,11 @@ This plan is **dependency-ordered**: each phase produces something runnable and 
   ├── testdata/
   │   └── gallery/        # saved copies of __NEXT_DATA__ HTML for offline tests
   ├── docs/               # CONTEXT.md, ADR, research (already populated)
-  ├── Dockerfile          # multi-stage, scratch or distroless final image
-  ├── docker-compose.yml  # api service + sync sidecar
+  ├── Dockerfile          # api and scraper image targets
   ├── riftapi.example.env # documented env vars
   └── Makefile            # build, test, lint, run
   ```
-- [ ] Go version: 1.22+ (current stable). Pin in `go.mod` and `Dockerfile`.
+- [ ] Go version: 1.25+. Pin in `go.mod` and `Dockerfile`.
 - [ ] SQLite driver: `modernc.org/sqlite` (pure Go, no CGO, ARM cross-compile works without a cross toolchain).
 - [ ] Lint: `golangci-lint` with default linters. Format: `gofumpt`.
 - [ ] CI: optional. Skip for now; add a `make ci` target that runs `go test ./...`, `go vet ./...`, `golangci-lint run`.
@@ -50,7 +55,7 @@ This plan is **dependency-ordered**: each phase produces something runnable and 
 - `make build` produces two binaries.
 - `make build GOOS=linux GOARCH=arm64` (or any other target) cross-compiles cleanly.
 - `docker build .` (or `docker build --platform <arch> .`) succeeds.
-- `docker compose up api` starts a service that responds 200 on a placeholder `/healthz`.
+- `docker build --target api .` produces the long-running API image.
 
 **Implements decisions**: 3 (Go), 10 (server framework: stdlib `net/http`).
 
@@ -89,7 +94,7 @@ This plan is **dependency-ordered**: each phase produces something runnable and 
   CREATE TABLE sync_state (
     id INTEGER PRIMARY KEY CHECK (id = 1),
     last_sync_at TIMESTAMP,
-    last_status TEXT,                -- 'ok' | 'partial' | 'failed'
+    last_status TEXT,                -- 'ok' | 'failed'
     last_card_count INTEGER,
     last_build_id TEXT,              -- from upstream (if discoverable)
     last_error TEXT
@@ -100,7 +105,9 @@ This plan is **dependency-ordered**: each phase produces something runnable and 
 - [ ] **WAL mode** on every connection: `PRAGMA journal_mode=WAL;` and `PRAGMA synchronous=NORMAL;`. Allows concurrent reads during sync writes.
 - [ ] Repository interface in `internal/store/` (e.g. `CardRepo`, `SetRepo`, `SyncRepo`) with concrete SQLite impls.
 - [ ] Connection management: one `*sql.DB` per process, opened on startup, never closed until shutdown.
-- [ ] **Atomic snapshot swap** helper used by the scraper: write to a temp file (`riftapi.db.tmp`), `PRAGMA wal_checkpoint(TRUNCATE)`, then `os.Rename` over the real file. The API keeps reading the old file (via a file handle reopened on each request, or by short-lived connections) until the rename lands.
+- [ ] **Atomic snapshot** helper used by the scraper: replace cards, sets,
+  and the successful sync state in one SQLite transaction. Failed
+  validation leaves the previous snapshot untouched.
 
 **Verify**:
 - `go test ./internal/store/...` exercises insert/read/indexes.
@@ -116,7 +123,7 @@ This plan is **dependency-ordered**: each phase produces something runnable and 
 
 ## Phase 2 — Scraper & sync
 
-**Goal**: a `riftapi-sync` binary that pulls `__NEXT_DATA__` from `playriftbound.com/en-us/card-gallery/`, transforms each card into the card data shape, and writes a fresh snapshot atomically.
+**Goal**: a `riftapi-scraper` binary that pulls `__NEXT_DATA__` from `playriftbound.com/en-us/card-gallery/`, transforms each card into the card data shape, and writes a fresh snapshot atomically.
 
 **What you build**:
 - [ ] `internal/scrape/client.go` — single `GET` to the gallery URL with a 30s timeout, 2 retries with exponential backoff, custom `User-Agent` identifying the project (e.g. `riftapi/0.1 (+https://github.com/<you>/riftapi)`). Respect a 1 req/sec rate limit even though the upstream has no documented limit.
@@ -142,12 +149,12 @@ This plan is **dependency-ordered**: each phase produces something runnable and 
   - `metadata.clean_name` ← lowercased, punctuation-stripped `name`.
   - `metadata.updated_on` ← `null` (not available from upstream).
   - `tcgplayer_id` ← `null`.
-- [ ] `internal/scrape/sync.go` — orchestrate: fetch → parse → transform → write to a temp DB → health check → atomic swap → update `sync_state`.
+- [ ] `internal/scrape/sync.go` — orchestrate: fetch → parse → transform → validate → atomically replace the snapshot and update `sync_state`.
 - [ ] **Health check at the end of sync** (this is half of decision 10):
   - Card count must be ≥ 1100 (well below the expected ~1178 but loud if upstream returns a near-empty response).
   - A known sample of card IDs must resolve: `ogn-011`, `unl-001`, `sfd-001`, `ven-001`. If any of these are missing, fail.
   - On failure, leave the previous snapshot untouched and update `sync_state` with `last_status = 'failed'`, `last_error` populated.
-- [ ] `cmd/riftapi-sync/main.go` — entry point: load config, run `scrape.Sync(ctx)`, exit non-zero on failure.
+- [ ] `cmd/riftapi-scraper/main.go` — entry point: load config, run the sync, exit non-zero on failure.
 
 **Verify**:
 - `go test ./internal/scrape/...` with at least three fixtures:
@@ -168,10 +175,10 @@ This plan is **dependency-ordered**: each phase produces something runnable and 
 **Goal**: the API exposes a `/health` endpoint that returns the last sync's status, and the sync job sends a Telegram message to the maintainer when a sync fails.
 
 **What you build**:
-- [ ] `internal/health/check.go` — read `sync_state`, return `{status, last_sync_at, last_card_count, last_error}`.
-- [ ] `internal/api/health.go` — `GET /health` handler, returns 200 if `last_status == 'ok'`, 503 otherwise.
+- [ ] `internal/health/check.go` — hold shared sync-health decisions.
+- [ ] `internal/api/health.go` — `GET /health` handler with `ok`/`degraded` (200) and failed/unreachable (`503`) states.
 - [ ] `internal/health/alert.go` — Telegram alert sender. Uses `TELEGRAM_BOT_TOKEN` + `ADMIN_CHAT_ID` env vars to call `https://api.telegram.org/bot<token>/sendMessage`. One-line message: `"riftapi sync failed: <error>"`. No retry — if Telegram is down, the next sync will alert again.
-- [ ] Wire into `cmd/riftapi-sync/main.go`: after a failed health check, call the alert sender.
+- [ ] Wire into `cmd/riftapi-scraper/main.go`: after a failed sync, call the alert sender.
 - [ ] **Critical**: the alert sender is the *only* code path that uses `TELEGRAM_BOT_TOKEN`. The token is read in the sync binary, never the API binary. This keeps the read-only API free of write-capable secrets.
 - [ ] Config: `TELEGRAM_ALERTS_ENABLED` (default `true`). If false, the alert is a no-op even with the token set. Useful for local dev.
 
@@ -197,21 +204,21 @@ This plan is **dependency-ordered**: each phase produces something runnable and 
 - [ ] Handlers (only the 4 most-used endpoints to start; expand the surface in Phase 5):
 - [ ] `GET /cards/name?fuzzy=<query>` — case-insensitive `LIKE` on `name` and `clean_name`. Returns an array of cards in the search-response shape.
 - [ ] `GET /cards/{id}` — lookup by `riftbound_id` (e.g. `ogn-011`). Returns one card or 404.
-- [ ] `GET /cards/riftbound/{id}` — always 404 (no upstream UUIDs — see ADR-0001).
-- [ ] `GET /index/card-names` — `SELECT name FROM cards ORDER BY name`. Returns `{total, type: "card-names", values: [...]}`.
+- [ ] `GET /cards/riftbound/{id}` — lookup by the local `riftbound_id`, preserving the array response shape.
+- [ ] `GET /index/card-names` — `SELECT DISTINCT name FROM cards ORDER BY name`. Returns `{total, type: "card-names", values: [...]}`.
 - [ ] Response shape: hand-write the JSON marshaller. The `payload` JSON blob on each row already encodes the card data; the handlers just unmarshal and re-marshal with proper field ordering. No need for `encoding/json` struct tags acrobatics — `json.RawMessage` round-trips the blob.
 - [ ] Error responses: `{ "error": "<code>", "message": "<human>" }` with 400/404/500/503. Keep the shape stable so consumers can parse it uniformly.
 - [ ] CORS: open by default (this is a hobby tool, the bot is the only consumer, but allowing browser access doesn't hurt).
 - [ ] Server config: `PORT` (default `8080`), `BIND` (default `0.0.0.0`), `DATABASE_PATH` (default `/data/riftapi.db`).
 - [ ] **Legal Jibber Jabber attribution** (decision 9): add the statement to a `GET /` handler that returns `{name: "riftapi", version: "...", upstream: "playriftbound.com", attribution: "This project was created under Riot Games' 'Legal Jibber Jabber' policy using assets owned by Riot Games. Riot Games does not endorse or sponsor this project."}`. Document in the README too.
 - [ ] `cmd/riftapi/main.go` — entry point: load config, open DB, mount handlers, `http.ListenAndServe`.
-- [ ] `Dockerfile` for the API: multi-stage `golang:1.22` → `gcr.io/distroless/static:nonroot` (or `scratch`), final image ~10 MB, runs as UID 65532.
-- [ ] `docker-compose.yml`: `api` service on a named volume for `/data`. Read `DATABASE_PATH` from env.
+- [ ] `Dockerfile` for the API: multi-stage `golang:1.25` → `gcr.io/distroless/static:nonroot` (or `scratch`), final image ~10 MB, runs as UID 65532.
+- [ ] Docker image targets: `api` for the long-running server and `sync` for the one-shot scraper.
 
 **Verify**:
 - `go test ./internal/api/...` with table-driven cases per endpoint: hit each handler with a known fixture DB, assert response shape and status codes.
 - **Contract test**: start the API pointing at a fixture DB, `curl` each of the 4 endpoints, and assert the JSON shape matches a known-good reference for the same query. (Catches drift in your response shape — the most likely source of subtle consumer breakage.)
-- Manual: `docker compose up`, `curl localhost:8080/cards/riftbound/ogn-011`, confirm a card-shaped JSON response.
+- Manual: run the `api` image, then `curl localhost:8080/cards/riftbound/ogn-011`, and confirm a card-shaped JSON response.
 
 **Implements decisions**: 2 (card data surface — but only 4 endpoints live), 3, 9 (attribution).
 
@@ -243,14 +250,26 @@ This plan is **dependency-ordered**: each phase produces something runnable and 
 ---
 
 
+## Phase 6 — Consumer validation (external)
+
+**Goal**: validate the API against the bot or other consumer that will use
+the deployment.
+
+This phase is intentionally outside this repository: no consumer project is
+included here. The API contract tests in `internal/api` cover the local
+surface; the remaining work is to point the real consumer at a deployed API
+and run its own command checklist.
+
+---
+
 ## Phase 7 — Ops & hardening
 
 **Goal**: the thing runs unattended for a year.
 
 **What you build**:
 - [ ] `systemd` unit files (host or sidecar container — your call at deploy time):
-  - `riftapi-sync.timer` — `OnCalendar=*-*-* 03:00:00`, `Persistent=true`, `Wants=riftapi-sync.service`.
-  - `riftapi-sync.service` — `Type=oneshot`, runs `riftapi-sync`, logs to journald.
+  - `riftapi-scraper.timer` — `OnCalendar=*-*-* 03:00:00`, `Persistent=true`, starts `riftapi-scraper.service`.
+  - `riftapi-scraper.service` — `Type=oneshot`, runs `riftapi-scraper`, logs to journald.
   - `riftapi.service` — long-running, `Restart=always`, the API server.
 - [ ] Config file: `/etc/riftapi/config.yaml` with the schema:
   ```yaml
@@ -274,7 +293,7 @@ This plan is **dependency-ordered**: each phase produces something runnable and 
 - [ ] A `docs/RUNBOOK.md` documenting: how to flip the sync toggle, how to read the last sync status, how to re-run a failed sync, how to restore from a backup, how to rotate the Telegram token.
 
 **Verify**:
-- Manually disable/enable the timer with `systemctl --user stop riftapi-sync.timer` and confirm the next scheduled run is skipped.
+- Manually disable/enable the timer with `systemctl stop riftapi-scraper.timer` and confirm the next scheduled run is skipped.
 - Replay a saved `testdata/gallery/` HTML through the sync binary end-to-end and confirm the resulting DB matches what the live scrape produces.
 - Disaster drill: drop the DB, restore from the latest backup, confirm the API serves the restored data.
 
@@ -288,12 +307,12 @@ These are decisions that were intentionally deferred during the strategic grill 
 
 | Phase | Question | Recommended default |
 |---|---|---|
-| 1 | DB file location | `/data/riftapi.db` (mounted Docker volume) |
+| 1 | DB file location | `/data/riftapi.db` (a mounted volume or host path) |
 | 2 | Archive raw upstream JSON to `testdata/`? | Yes, gated by `--archive` flag |
 | 3 | Reuse an existing Telegram bot token vs new notifier bot? | Dedicated notifier bot; admin chat ID is a new env var |
 | 3 | Where do Telegram env vars live? | On the host running the sync job, not in the API container |
 | 4 | `text.flavour` heuristic? | No — leave as `null` (ADR-0001) |
-| 7 | Timer on host vs in a sidecar container? | Sidecar — keeps the API and sync in one `docker compose` |
+| 7 | Timer on host vs in a sidecar container? | Host systemd timer running the scraper binary |
 | 7 | TLS: Caddy vs direct? | Caddy — auto-renews, trivial config |
 | 7 | Backup retention? | 7 days, then prune |
 

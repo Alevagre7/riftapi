@@ -34,5 +34,6 @@ Thumbs.db
 
 # Scraped fixtures (intentionally not committed; the scraper regenerates them)
 testdata/gallery/*.html
+!testdata/gallery/sample.html
 testdata/gallery/*.json
 !testdata/gallery/.gitkeep

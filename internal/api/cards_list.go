@@ -2,6 +2,7 @@ package api
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"strconv"
 	"strings"
@@ -13,7 +14,11 @@ import (
 // Returns a paginated list of cards. Response shape is the
 // search-response shape: {items, total, page, size, pages}.
 func (s *Server) listCards(w http.ResponseWriter, r *http.Request) {
-	opts := parseListOptions(r)
+	opts, err := parseListOptions(r)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
 	rows, total, err := s.store.Cards().List(r.Context(), opts)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
@@ -31,7 +36,11 @@ func (s *Server) searchCards(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "query is required")
 		return
 	}
-	opts := parseListOptions(r)
+	opts, err := parseListOptions(r)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
 	rows, total, err := s.store.Cards().SearchText(r.Context(), query, opts)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
@@ -48,21 +57,53 @@ func (s *Server) getCardByTcgPlayerID(w http.ResponseWriter, _ *http.Request) {
 	writeError(w, http.StatusNotFound, "tcgplayer_id is not available in the upstream gallery (ADR-0001)")
 }
 
-// parseListOptions extracts the list/search query parameters into a
-// store.ListCardsOptions. The Page/Size/Dir clamps happen inside
-// the store layer, so this function only parses.
-func parseListOptions(r *http.Request) store.ListCardsOptions {
+// parseListOptions extracts and validates the list/search query parameters.
+// Page and size zero retain their store defaults; negative values and unknown
+// sort directions are caller errors rather than silently changing the query.
+func parseListOptions(r *http.Request) (store.ListCardsOptions, error) {
 	q := r.URL.Query()
-	page, _ := strconv.Atoi(q.Get("page"))
-	size, _ := strconv.Atoi(q.Get("size"))
-	dir, _ := strconv.Atoi(q.Get("dir"))
+	page, err := parseOptionalInt(q.Get("page"), "page")
+	if err != nil {
+		return store.ListCardsOptions{}, err
+	}
+	size, err := parseOptionalInt(q.Get("size"), "size")
+	if err != nil {
+		return store.ListCardsOptions{}, err
+	}
+	dir, err := parseOptionalInt(q.Get("dir"), "dir")
+	if err != nil {
+		return store.ListCardsOptions{}, err
+	}
+	if page < 0 || size < 0 {
+		return store.ListCardsOptions{}, fmt.Errorf("page and size must not be negative")
+	}
+	if dir != -1 && dir != 0 && dir != 1 {
+		return store.ListCardsOptions{}, fmt.Errorf("dir must be -1, 0, or 1")
+	}
+	sort := q.Get("sort")
+	switch sort {
+	case "", "name", "collector_number", "set_id":
+	default:
+		return store.ListCardsOptions{}, fmt.Errorf("unsupported sort %q", sort)
+	}
 	return store.ListCardsOptions{
 		SetID: q.Get("set_id"),
-		Sort:  q.Get("sort"),
+		Sort:  sort,
 		Dir:   dir,
 		Page:  page,
 		Size:  size,
+	}, nil
+}
+
+func parseOptionalInt(value, name string) (int, error) {
+	if value == "" {
+		return 0, nil
 	}
+	n, err := strconv.Atoi(value)
+	if err != nil {
+		return 0, fmt.Errorf("%s must be an integer", name)
+	}
+	return n, nil
 }
 
 // writeSearchResponse writes the search-response shape

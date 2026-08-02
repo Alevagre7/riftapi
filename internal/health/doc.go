@@ -1,16 +1,15 @@
-// Package health owns the /health endpoint and the Telegram alert path
-// that fires when a sync fails.
+// Package health owns shared sync-health decisions and the Telegram alert
+// path that fires when a sync fails.
 //
 // Two entry points:
 //
-//   - check.go — reads sync_state from the store and returns it as a
-//                typed value. Used by the /health handler in the api
-//                package.
+//   - check.go — decides whether a sync state and card count satisfy the
+//     API's configured health threshold.
 //   - alert.go — sends a one-line message to a Telegram chat when the
-//                sync job's health check fails. The bot token and chat
-//                id are read from the environment; the alert is a
-//                no-op when alerts are disabled or unconfigured.
+//     sync job's health check fails. The bot token and chat
+//     id are read from the environment; the alert is a
+//     no-op when alerts are disabled or unconfigured.
 //
-// Only the sync binary reads the Telegram token. The API binary never
-// sees it, which keeps the read-only API free of write-capable secrets.
+// Only the scraper passes the Telegram token to the alert sender. The API
+// never uses it, which keeps the read-only API free of write-capable secrets.
 package health

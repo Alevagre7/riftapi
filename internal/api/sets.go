@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
-	"strconv"
 
 	"github.com/xalevagre7/riftapi/internal/store"
 )
@@ -28,8 +27,20 @@ func (s *Server) registerSetRoutes(mux *http.ServeMux) {
 // search-response shape: {items, total, page, size, pages}.
 func (s *Server) listSets(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
-	page, _ := strconv.Atoi(q.Get("page"))
-	size, _ := strconv.Atoi(q.Get("size"))
+	page, err := parseOptionalInt(q.Get("page"), "page")
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	size, err := parseOptionalInt(q.Get("size"), "size")
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	if page < 0 || size < 0 {
+		writeError(w, http.StatusBadRequest, "page and size must not be negative")
+		return
+	}
 	rows, total, err := s.store.Sets().List(r.Context(), store.ListSetsOptions{Page: page, Size: size})
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())

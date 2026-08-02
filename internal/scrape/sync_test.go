@@ -158,6 +158,16 @@ func TestSyncer_Run_FailsBelowMinCount(t *testing.T) {
 	upstream := upstreamFromFixture(t, body)
 	st := newTestStore(t)
 	alert := &recordingSender{}
+	if err := st.Cards().Upsert(context.Background(), store.CardRow{
+		RiftboundID: "old-card", SetID: "OLD", Name: "Old", Payload: []byte(`{"name":"Old"}`),
+	}); err != nil {
+		t.Fatalf("seed old card: %v", err)
+	}
+	if err := st.Sets().Upsert(context.Background(), store.SetRow{
+		SetID: "OLD", CardCount: 1, Payload: []byte(`{"set_id":"OLD"}`),
+	}); err != nil {
+		t.Fatalf("seed old set: %v", err)
+	}
 
 	syn := &scrape.Syncer{
 		Store:    st,
@@ -184,12 +194,59 @@ func TestSyncer_Run_FailsBelowMinCount(t *testing.T) {
 	if !strings.Contains(state.LastError, "only 2 cards parsed") {
 		t.Errorf("LastError = %q, want it to mention the min-count failure", state.LastError)
 	}
+	if count, err := st.Cards().Count(context.Background()); err != nil || count != 1 {
+		t.Errorf("card snapshot after failed sync = count %d, err %v; want old snapshot preserved", count, err)
+	}
+	if _, err := st.Cards().GetByRiftboundID(context.Background(), "old-card"); err != nil {
+		t.Errorf("old card after failed sync: %v", err)
+	}
+	if _, err := st.Sets().GetByID(context.Background(), "OLD"); err != nil {
+		t.Errorf("old set after failed sync: %v", err)
+	}
 
 	// Alert was sent.
 	if msgs := alert.messages(); len(msgs) != 1 {
 		t.Errorf("expected 1 alert, got %d: %v", len(msgs), msgs)
 	} else if !strings.Contains(msgs[0], "riftapi sync failed") {
 		t.Errorf("alert text = %q, want one mentioning 'riftapi sync failed'", msgs[0])
+	}
+}
+
+func TestSyncer_Run_FailsOnInvalidCardWithoutReplacingSnapshot(t *testing.T) {
+	body, err := os.ReadFile(filepath.Join("..", "..", "testdata", "gallery", "sample.html"))
+	if err != nil {
+		t.Fatalf("read fixture: %v", err)
+	}
+	invalidBody := strings.Replace(string(body), `"label":"3"`, `"label":"not-a-number"`, 1)
+	if invalidBody == string(body) {
+		t.Fatal("test fixture did not contain the expected numeric stat label")
+	}
+	upstream := upstreamFromFixture(t, []byte(invalidBody))
+	st := newTestStore(t)
+	alert := &recordingSender{}
+	if err := st.Cards().Upsert(context.Background(), store.CardRow{
+		RiftboundID: "old-card", SetID: "OLD", Name: "Old", Payload: []byte(`{"name":"Old"}`),
+	}); err != nil {
+		t.Fatalf("seed old card: %v", err)
+	}
+
+	syn := &scrape.Syncer{
+		Store:  st,
+		Client: scrape.NewClient(scrape.ClientConfig{BaseURL: upstream.URL, UserAgent: "test", MaxRetries: 0}),
+		Alert:  alert,
+	}
+	err = syn.Run(context.Background())
+	if err == nil || !strings.Contains(err.Error(), "invalid attributes") {
+		t.Fatalf("Run error = %v, want invalid-attributes failure", err)
+	}
+	if count, err := st.Cards().Count(context.Background()); err != nil || count != 1 {
+		t.Errorf("card snapshot after failed transform = count %d, err %v; want old snapshot preserved", count, err)
+	}
+	if _, err := st.Cards().GetByRiftboundID(context.Background(), "old-card"); err != nil {
+		t.Errorf("old card after failed transform: %v", err)
+	}
+	if len(alert.messages()) != 1 {
+		t.Errorf("expected one alert, got %d", len(alert.messages()))
 	}
 }
 
